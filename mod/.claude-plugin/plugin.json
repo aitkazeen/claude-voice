@@ -1,1 +1,1 @@
-{"name": "voice-wake", "version": "0.6.0", "license": "MIT", "description": "Hands-free voice input: say \"Клод приём\", speak, end with \"приём\"; the text lands in the prompt", "types": "./types/index.d.ts"}
+{"name": "voice-wake", "version": "0.6.0", "license": "MIT", "author": {"name": "aitkazeen", "url": "https://github.com/aitkazeen"}, "homepage": "https://github.com/aitkazeen/claude-voice", "description": "Hands-free, offline voice input: say \"Claude, over\" (or «Клод, приём»), speak, end with \"over\"; the text lands in the prompt", "types": "./types/index.d.ts"}
