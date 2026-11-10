@@ -279,7 +279,29 @@ async function heartbeat($: EngineInterface, closed = false) {
   const folder = cwd.split(/[\\/]/).filter(Boolean).pop() ?? ''
   const entry: Entry = { id: selfId, folder, label, seen: await $.clock.now(), since, ...(await gitInfo($, cwd)) }
   await $.fs.write(`${reg()}/${selfId}.json`, JSON.stringify(closed ? { ...entry, closed } : entry))
-  if (!closed) await refreshSessions($)
+  if (closed) return releaseMic($)
+  await refreshSessions($)
+  await followSwitch($)
+}
+
+/** The on/off switch is one for every session ($.store is shared): a session
+ * without a listener follows it here — off when it was turned off elsewhere, and
+ * a busy one takes the mic at once when its holder let go. */
+async function followSwitch($: EngineInterface) {
+  if (child) return
+  const p = await read($, phase)
+  if (!(await isEnabled($))) {
+    if (p !== 'off' && p !== 'not-installed') await setPhase($, 'off')
+  } else if (p === 'off' || (p === 'busy' && !(await $.fs.read(`${reg()}/owner`).then(t => t.trim(), () => '')))) {
+    void run($)
+  }
+}
+
+/** This session's listener is gone: the mic is nobody's until another one starts. */
+async function releaseMic($: EngineInterface) {
+  if (!dir) return
+  const owner = await $.fs.read(`${reg()}/owner`).then(t => t.trim(), () => '')
+  if (owner === selfId) await $.fs.write(`${reg()}/owner`, '')
 }
 
 /** Send voice to session `id` and put it on screen in Claude Desktop. Choosing
@@ -447,8 +469,20 @@ async function route($: EngineInterface, line: Line) {
   await deliver($, line)
 }
 
+let starting = false // run() between its check and the spawn: two calls would start two listeners
+
 async function run($: EngineInterface) {
-  if (child || !(await isEnabled($))) return
+  if (child || starting) return
+  starting = true
+  try {
+    await start($)
+  } finally {
+    starting = false
+  }
+}
+
+async function start($: EngineInterface) {
+  if (!(await isEnabled($))) return setPhase($, 'off') // turned off in another session meanwhile
   if (!dir) {
     await setPhase($, 'not-installed')
     $.ui.log(`voice-wake: no listener venv found; run python ${INSTALL_HINT}`)
@@ -461,6 +495,7 @@ async function run($: EngineInterface) {
     env: { PYTHONIOENCODING: 'utf-8' },
   })
   child = proc
+  starting = false
   const startedAt = await $.clock.now()
   let buf = ''
   let busy = false
@@ -498,6 +533,7 @@ async function run($: EngineInterface) {
   }
   const stoppedByUs = child !== proc
   if (child === proc) child = undefined
+  if (!busy) await releaseMic($)
   if (stoppedByUs || !(await isEnabled($))) return
   if (busy) {
     // Another session owns the mic; take over once it lets go.
@@ -523,6 +559,7 @@ async function setEnabled($: EngineInterface, enable: boolean) {
   const proc = child
   child = undefined
   void proc?.return(undefined)
+  if (proc) await releaseMic($)
   await setPhase($, 'off')
 }
 
