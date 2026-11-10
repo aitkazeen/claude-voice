@@ -16,9 +16,28 @@
 
 ## Установка
 
-```bash
-python listener/install.py
+Нужны Windows, Python 3.10+ и Claude Code Desktop.
+
+**1. Мод** — в Claude Code:
+
 ```
+/plugin install voice-wake --marketplace aitkazeen/claude-voice
+```
+
+Claude клонирует репозиторий в `%USERPROFILE%\.claude\plugins\marketplaces\claude-voice`
+и ставит из него мод.
+
+**2. Слушатель** (модели и Python-зависимости) — один раз, в терминале:
+
+```bash
+python %USERPROFILE%\.claude\plugins\marketplaces\claude-voice\listener\install.py
+```
+
+Перезапусти Claude Desktop: над полем ввода появится «🎙 Слушаю». Обновления плагина
+(`/plugin update`) не трогают поставленные модели: они лежат в игнорируемых git папках.
+
+Из своей копии репозитория (для разработки) — `python listener/install.py` и
+«Подключение мода» ниже.
 
 Скрипт создаёт `listener/.venv`, ставит зависимости из `requirements.txt` и скачивает
 в `listener/models/` Vosk `vosk-model-small-ru-0.22` (~45 МБ) и faster-whisper `small`
@@ -45,9 +64,9 @@ listener\.venv\Scripts\python listener\listen.py
 
 Скажи «Клод, приём» (пауза), «привет, приём» — после второго писка появится строка `{"text": "Привет", "submit": false}`.
 
-### Подключение мода
+### Подключение мода из своей копии
 
-Мод лежит в `mod/`. Чтобы он загружался в каждом сеансе Claude Code Desktop, добавь
+Нужно, только если ставишь не через `/plugin install`. Мод лежит в `mod/`. Чтобы он загружался в каждом сеансе Claude Code Desktop, добавь
 в `~/.claude/settings.json`:
 
 ```json
@@ -57,7 +76,8 @@ listener\.venv\Scripts\python listener\listen.py
 и перезапусти Claude Desktop. Если `CLAUDE_CODE_PLUGIN_DIRS` уже задан, допиши путь
 через `;`, не затирая остальные. Мод ищет слушатель в `../listener` рядом с собой,
 а если его там нет — в папке из переменной окружения `VOICE_WAKE_LISTENER_DIR`
-(её можно задать там же, в `env`).
+(её можно задать там же, в `env`), а потом в клоне маркетплейса
+`%USERPROFILE%\.claude\plugins\marketplaces\claude-voice\listener`.
 
 ## Как пользоваться
 

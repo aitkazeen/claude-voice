@@ -4,7 +4,13 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { BandView, Phase, VoiceSession } from '../types'
 
 // Where listener/ lives: beside the mod folder when loaded from the repo
-// (CLAUDE_CODE_PLUGIN_DIRS=<repo>/mod), else $VOICE_WAKE_LISTENER_DIR.
+// (CLAUDE_CODE_PLUGIN_DIRS=<repo>/mod), else $VOICE_WAKE_LISTENER_DIR, else the
+// marketplace's clone: `claude plugin install` copies only mod/ into a versioned
+// cache, while the marketplace keeps the whole repo at a stable path (and its
+// updates keep the ignored .venv/ and models/).
+const MARKETPLACE_LISTENER = '.claude/plugins/marketplaces/claude-voice/listener'
+// Where install.py is for someone who installed from the marketplace (a clone: listener/install.py).
+const INSTALL_HINT = `%USERPROFILE%/${MARKETPLACE_LISTENER}/install.py`
 const BUSY_RETRY_MS = 30_000
 const HEARTBEAT_MS = 5_000
 const STALE_MS = 20_000 // a session not heard from this long counts as closed
@@ -220,7 +226,8 @@ async function setPhase($: EngineInterface, p: Phase) {
 
 async function listenerDir($: EngineInterface): Promise<string | undefined> {
   const fallback = await $.env.get('VOICE_WAKE_LISTENER_DIR')
-  for (const d of [`${$.plugin.root}/../listener`, fallback]) {
+  const home = await $.env.get('USERPROFILE')
+  for (const d of [`${$.plugin.root}/../listener`, fallback, home && `${home}/${MARKETPLACE_LISTENER}`]) {
     if (!d) continue
     const st = await $.fs.stat(`${d}/.venv/Scripts/python.exe`).catch(() => undefined)
     if (st) return d
@@ -329,7 +336,7 @@ async function run($: EngineInterface) {
   if (child || !(await isEnabled($))) return
   if (!dir) {
     await setPhase($, 'not-installed')
-    $.ui.log(`voice-wake: no listener venv found; run python listener/install.py`)
+    $.ui.log(`voice-wake: no listener venv found; run python ${INSTALL_HINT}`)
     return
   }
   await setPhase($, 'loading')
@@ -595,7 +602,7 @@ export const register: Register = on => {
       case 'error':
         return row({ title: '🎙 Слушатель упал', color: 'red', hint: v.err || 'подробности в listener/listen.log', parts: [btn('Перезапустить', () => void setEnabled($, true))] })
       case 'not-installed':
-        return row({ title: '🎙 Нужна установка', hint: 'python listener/install.py' })
+        return row({ title: '🎙 Нужна установка', hint: `python ${INSTALL_HINT}` })
       case 'off':
         return row({ title: '🎙 Голосовой ввод выключен', dim: true, parts: [<Button key="Включить" label="Включить" onPress={() => void setEnabled($, true)} />] })
     }

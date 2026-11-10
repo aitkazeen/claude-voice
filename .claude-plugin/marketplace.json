@@ -1,0 +1,14 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-voice",
+  "description": "Hands-free voice input for Claude Code Desktop",
+  "owner": { "name": "aitkazeen", "url": "https://github.com/aitkazeen" },
+  "plugins": [
+    {
+      "name": "voice-wake",
+      "description": "Say «Клод приём», speak, end with «приём»: the text lands in the prompt. Offline (Vosk, faster-whisper, Kokoro), Windows.",
+      "source": "./mod",
+      "category": "productivity"
+    }
+  ]
+}
