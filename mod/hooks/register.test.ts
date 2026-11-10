@@ -115,14 +115,14 @@ test('the band: "Диктовать" tells the listener, then shows the recordin
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount(BAND)
-  await until(async () => (await ui.find({ key: 'Диктовать' })) !== undefined)
+  await until(async () => (await ui.find({ key: 'dictate' })) !== undefined)
 
-  await ui.press({ key: 'Диктовать' })
+  await ui.press({ key: 'dictate' })
   expect(file('/listener/cmd')?.[1]).toBe('dictate')
 
   recording()
-  await until(async () => (await ui.find({ key: 'Готово' })) !== undefined)
-  await ui.press({ key: 'Готово' })
+  await until(async () => (await ui.find({ key: 'done' })) !== undefined)
+  await ui.press({ key: 'done' })
   expect(file('/listener/cmd')?.[1]).toBe('stop')
   await ui.unmount()
 })
@@ -430,4 +430,20 @@ test('choosing a session opens it in Claude Desktop; choosing the shown one clea
   expect(files.get(`${reg}/target`)).toBe('')
   expect(opened.length).toBe(1)
   for (let i = 0; i < 20; i++) await (await $.ui.mount(BAND)).unmount()
+})
+
+test('with "lang": "en" in the listener config the band and command replies are in English', async ($, on) => {
+  const { files } = engine(on)
+  files.set('/listener/config.json', '{"lang": "en"}')
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"status": "ready"}\n' }
+    await new Promise(() => {})
+    return { value: { code: 0, signal: null } }
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount(BAND)
+  await until(async () => (await ui.find({ key: 'dictate' })) !== undefined)
+  expect(await ui.find({ key: 'dictate' })).toMatchObject({ text: 'Dictate' })
+  await ui.unmount()
+  expect((await $.command.run({ ...voiceTo('9') })).text).toBe('No session #9: there are 1.')
 })

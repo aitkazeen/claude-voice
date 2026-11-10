@@ -147,8 +147,9 @@ through `CLAUDE_CODE_PLUGIN_DIRS`. Key points:
   line, strips markdown and writes it to `listener/say`.
 - **UI**: a band above the prompt (`AbovePrompt`): phase, recording timer, where voice
   goes, buttons (Dictate / Done / Hush / Turn on / Turn off / Voice here); a Sessions
-  pane (`Pane`) with the list and hotkeys 1–9; the status line. Labels are in Russian
-  for now.
+  pane (`Pane`) with the list and hotkeys 1–9; the status line. All text comes from the
+  `UI` table, `ru` or `en` by the listener config's `"lang"` (English until a listener
+  is found).
 - On/off lives in `$.store` (shared by every session).
 
 ### Routing between sessions

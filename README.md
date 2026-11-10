@@ -40,7 +40,7 @@ and installs the mod from it.
 python %USERPROFILE%\.claude\plugins\marketplaces\claude-voice\listener\install.py --lang en
 ```
 
-Restart Claude Desktop: the band above the prompt shows "🎙 Слушаю" (listening).
+Restart Claude Desktop: the band above the prompt shows "🎙 Listening".
 Plugin updates (`/plugin update`) keep the installed models: they live in folders git
 ignores.
 
@@ -127,30 +127,31 @@ Beeps: high, heard "Claude over"; higher, message taken; low, nothing heard.
 For a voice prompt (sent with a 🎙 mark) Claude starts its reply with a line
 `🔊 <one English sentence>`, spoken while you read the rest. The listener reads it with
 the Kokoro voice `bf_emma` (offline, the model is in `listener/models/kokoro/`). While it
-speaks, "Claude, over" is not listened for; the band's **Замолчать** (Hush) button or
+speaks, "Claude, over" is not listened for; the band's **Hush** button or
 "Claude, stop" cuts it off. Voice and speed: `"voice"`, `"speed"` in `config.json`;
 `"speak": false` turns speech off.
 
 ### The band above the prompt
 
 The mod draws a band above the prompt box with the state and buttons, so you never have
-to type commands. Its labels are in Russian for now; here is what they mean.
+to type commands. The band, toasts, the Sessions pane and the command descriptions follow
+`"lang"` (English with `"lang": "en"`, and before the listener is installed).
 
 Every state has the same frame: what the listener does, a hint, where voice goes
-(`→ эта сессия`, this session, or `→ project · branch`; click it to open the sessions
-pane), the main button, and a dim **Выключить** (Turn off) at the end.
+(`→ this session` or `→ project · branch`; click it to open the Sessions pane), the main
+button, and a dim **Turn off** at the end.
 
 | State | Band | Buttons |
 | --- | --- | --- |
-| listening | 🎙 **Слушаю** (Listening) → where | **Диктовать** (Dictate): record at once, no wake phrase; **Выключить** |
-| recording | ● **Запись 0:07** (Recording) → where | **Готово** (Done): finish and send, like "over" |
-| transcribing | 🎙 **Распознаю** (Transcribing) → where | — |
-| speaking | 🔊 **Говорю** (Speaking) "the line being read" | **Замолчать** (Hush) |
-| loading | 🎙 **Загружаю модели** (Loading models); after a crash, «Перезапускаю слушатель» (Restarting) | **Выключить** |
-| mic held by another session | 🎙 **Микрофон у сессии** (Mic is with) project · branch | **Голос сюда** (Voice here); **Выключить везде** (Turn off everywhere) |
-| crashed | 🎙 **Слушатель упал** (Listener crashed) + the last error line | **Перезапустить** (Restart) |
-| not installed | 🎙 **Нужна установка** (Install needed) + the install command | — |
-| off | 🎙 Голосовой ввод выключен (Voice input off), dim | **Включить** (Turn on) |
+| listening | 🎙 **Listening** say "Claude, over" → where | **Dictate**: record at once, no wake phrase; **Turn off** |
+| recording | ● **Recording 0:07** end with "over" → where | **Done**: finish and send, like "over" |
+| transcribing | 🎙 **Transcribing** → where | — |
+| speaking | 🔊 **Speaking** "the line being read" | **Hush** |
+| loading | 🎙 **Loading models** (after a crash, "Restarting the listener") | **Turn off** |
+| mic held by another session | 🎙 **The mic is with** project · branch | **Voice here**: send voice to this session; **Turn off everywhere** |
+| crashed | 🎙 **The listener crashed** + the last error line | **Restart** |
+| not installed | 🎙 **Install needed** + the install command | — |
+| off | 🎙 Voice input off (dim) | **Turn on** |
 
 Pressing Done with nothing said sends nothing. The buttons work while the Claude window
 is open; from a browser or the tray, use your voice.
@@ -286,4 +287,5 @@ Other modes: `--wav file.wav` runs a WAV file (16 kHz mono) instead of the mic,
 - If the text can't be inserted (a dialog is open), it is shown in a Claude toast.
 - Windows only (winsound, Windows notifications, kernel32). About 1 GB of RAM while the
   listener runs.
-- The band, toasts and command descriptions are in Russian for now.
+- The band's hints name the default phrases of `"lang"`; with your own `wake_phrase` or
+  `end_word` they still say "Claude, over" / "over".
