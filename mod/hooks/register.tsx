@@ -234,12 +234,10 @@ async function voiceTarget($: EngineInterface) {
 async function refreshSessions($: EngineInterface) {
   if (!dir) return
   const { alive, target, owner, shown } = await voiceTarget($)
-  // This session first, then the others in the order they appeared: a new one
-  // goes last, so the numbers already shown stay. The place is /claude-voice-to's number.
-  const order = alive.sort(
-    (a, b) =>
-      Number(b.id === selfId) - Number(a.id === selfId) || (a.since ?? 0) - (b.since ?? 0) || a.id.localeCompare(b.id),
-  )
+  // In the order they appeared, the same list in every session: a new one goes
+  // last, so the numbers already shown stay. The place is /claude-voice-to's and
+  // «Клод, сессия n»'s number.
+  const order = alive.sort((a, b) => (a.since ?? 0) - (b.since ?? 0) || a.id.localeCompare(b.id))
   const names = order.map(where)
   const list: VoiceSession[] = order.map((e, i) => ({
     id: e.id,
@@ -625,8 +623,7 @@ export const register: Register = on => {
     return { text: t().nowTo(chosen.name) }
   })
 
-  // The sessions pane: this session first, then the others in the order they
-  // appeared; the number is the one /claude-voice-to and «Клод, сессия n» take, and its hotkey.
+  // The sessions pane: in the order they appeared, the same in every session; the number is the one /claude-voice-to and «Клод, сессия n» take, and its hotkey.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const list = await read($, sessions)

@@ -278,7 +278,7 @@ test('a voice prompt the engine drops (a Stop pressed while it waited) goes back
   expect(draft).toBe('1, 2, 3')
 })
 
-test('a session is named project · branch, this one first; choosing the mic session is the default', async ($, on) => {
+test('a session is named project · branch, in the order they appeared; choosing the mic session is the default', async ($, on) => {
   const cwd = '/r/claude-voice/.claude/worktrees/wt1'
   const { files } = engine(on, 'self', false, cwd)
   on('session.repo', () => ({ value: { root: '/r/claude-voice', remote: null, internal: false, name: null } }))
@@ -299,14 +299,14 @@ test('a session is named project · branch, this one first; choosing the mic ses
 
   const listed = (await $.command.run(voiceTo(''))).text!.split('\n')
   expect(listed).toEqual([
-    '1. claude-voice · wt1 (эта)',
-    '2. api · main (old) (микрофон) ← голос сюда',
-    '3. api · main (twin)',
+    '1. api · main (old) (микрофон) ← голос сюда',
+    '2. api · main (twin)',
+    '3. claude-voice · wt1 (эта)',
   ])
 
-  await $.command.run(voiceTo('3'))
+  await $.command.run(voiceTo('2'))
   expect(files.get(`${sessionsDir()}/target`)).toBe('twin1234')
-  await $.command.run(voiceTo('2')) // the mic's session: back to the default
+  await $.command.run(voiceTo('1')) // the mic's session: back to the default
   expect(files.get(`${sessionsDir()}/target`)).toBe('')
   // Let the heartbeat's writes finish before the test ends.
   for (let i = 0; i < 20; i++) await (await $.ui.mount(BAND)).unmount()
@@ -334,7 +334,7 @@ test('«Клод, сессия 2» chooses the second session and says so; «с�
     return { isFilled: true }
   })
   const reg = sessionsDir()
-  files.set(`${reg}/bbb.json`, JSON.stringify({ id: 'bbb', folder: 'other', branch: 'claude/fix', label: '', seen: 1_000, since: 5 }))
+  files.set(`${reg}/bbb.json`, JSON.stringify({ id: 'bbb', folder: 'other', branch: 'claude/fix', label: '', seen: 1_000, since: 1e15 }))
   let go!: () => void
   const commands = new Promise<void>(r => (go = r))
   on('process.spawn', async function* () {
@@ -416,7 +416,7 @@ test('choosing a session opens it in Claude Desktop; choosing the shown one clea
     return { value: { code: 0, signal: null } }
   })
   const reg = sessionsDir()
-  files.set(`${reg}/bbb.json`, JSON.stringify({ id: 'bbb', folder: 'other', label: '', seen: 1_000, since: 2 }))
+  files.set(`${reg}/bbb.json`, JSON.stringify({ id: 'bbb', folder: 'other', label: '', seen: 1_000, since: 1e15 }))
   files.set(`${reg}/focused`, 'aaa')
   files.set(`${reg}/desktop-ids.json`, JSON.stringify({ bbb: 'local_b2', aaa: 'local_a1' }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })

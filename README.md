@@ -167,8 +167,8 @@ By default, the session shown on screen in Claude Desktop. If that session has n
 loaded (or Desktop's state can't be read), the session holding the mic. To choose
 another:
 
-- click "→ …" on the band to open the Sessions pane. This session is always first (#1),
-  the others follow in the order they appeared, tagged this / on screen / 🎙 mic. The
+- click "→ …" on the band to open the Sessions pane. Sessions are listed in the order they
+  appeared, the same list and numbers in every session, tagged this / on screen / 🎙 mic. The
   voice target has a ✓. A session's number is its hotkey in the pane (1–9). The chosen
   session opens in Desktop. The choice holds until you open another session on screen;
   then voice follows the screen again;
