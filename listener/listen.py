@@ -28,22 +28,52 @@ RATE = 16000
 BLOCK = 1600  # 0.1 s
 STOP_BLOCKS = 3  # the stop phrase in this many partial results in a row counts as said
 
+# Everything said or heard, per language: "lang" in config.json picks one (default
+# "ru"); any of these keys set there overrides it. Phrase words must be in the
+# Vosk model's vocabulary (the Russian one spells ё).
+LANGS = {
+    "ru": {
+        "wake_phrase": "клод приём",
+        "text_phrase": "клод текст",  # like the wake phrase, but the message is only inserted, never sent
+        "stop_phrase": "клод стоп",  # interrupts Claude's running turn at once, no end word needed
+        "cancel_word": "отмена",  # a pause after this word throws the recording away
+        "end_word": "приём",  # the message is recorded until this word, however long the pauses
+        "submit_word": "отправь",  # with submit_on_end false: "…, отправь, приём" sends
+        "which_phrase": "клод какая сессия",
+        "clear_phrase": "клод сотри",
+        "repeat_phrase": "клод повтори",
+        "session_phrases": ["клод сессия", "клод перейди на сессию"],  # each + a number word
+        "numbers": "один два три четыре пять шесть семь восемь девять".split(),
+        "vosk_model": "models/vosk-model-small-ru-0.22",
+        "language": "ru",  # whisper's: "ru", "en" or "auto"
+        # Words you say often: whisper leans toward them. Not the end word: on near
+        # silence whisper may echo the prompt, and an echoed end word would send.
+        "whisper_prompt": "Claude. Сессия, мод, коммит, ветка, тест, воспроизведение, распознавание.",
+    },
+    "en": {
+        "wake_phrase": "claude over",
+        "text_phrase": "claude text",
+        "stop_phrase": "claude stop",
+        "cancel_word": "cancel",
+        "end_word": "over",
+        "submit_word": "send",
+        "which_phrase": "claude which session",
+        "clear_phrase": "claude clear",
+        "repeat_phrase": "claude repeat",
+        "session_phrases": ["claude session", "claude switch to session"],
+        "numbers": "one two three four five six seven eight nine".split(),
+        "vosk_model": "models/vosk-model-small-en-us-0.15",
+        "language": "en",
+        "whisper_prompt": "Claude. Session, mod, commit, branch, test, plugin, transcription.",
+    },
+}
+
 DEFAULTS = {
-    "wake_phrase": "клод приём",  # words must be in the Vosk vocabulary (it spells ё)
-    "text_phrase": "клод текст",  # like the wake phrase, but the message is only inserted, never sent
-    "stop_phrase": "клод стоп",  # interrupts Claude's running turn at once, no end word needed
-    "cancel_word": "отмена",  # a pause after this word throws the recording away
-    "end_word": "приём",  # the message is recorded until this word, however long the pauses
+    "lang": "ru",
     "submit_on_end": True,  # the end word also sends; False: insert only, send with submit_word
-    "submit_word": "отправь",  # with submit_on_end false: "…, отправь, приём" sends
-    "vosk_model": "models/vosk-model-small-ru-0.22",
     "whisper_model": "models/faster-whisper-small",
-    "language": "ru",  # "ru", "en" or "auto"
     "whisper_device": "auto",  # "auto" (GPU if it works, else CPU), "cuda" or "cpu"
     "beam_size": 5,  # 1 is faster, 5 makes fewer gross mistakes
-    # Words you say often: whisper leans toward them. Not the end word: on near
-    # silence whisper may echo the prompt, and an echoed "приём" would send.
-    "whisper_prompt": "Claude. Сессия, мод, коммит, ветка, тест, воспроизведение, распознавание.",
     "energy_threshold": 500,  # only for --levels
     "end_guard_sec": 0.8,  # ignore the end word this long after the trigger (tail of the wake phrase)
     "start_timeout_sec": 8,  # no speech at all this long after the wake phrase: cancel
@@ -64,15 +94,14 @@ DEFAULTS = {
 }
 
 PUNCT = r"[\s,.!?:;-]*"
-NUMBERS = "один два три четыре пять шесть семь восемь девять".split()
 
 
-def command_phrases():
-    """Voice commands after "клод" (no end word): phrase -> the line emitted to the mod.
-    Every word must be in the Vosk vocabulary."""
-    out = {"клод какая сессия": {"cmd": "which"}, "клод сотри": {"cmd": "clear"}, "клод повтори": {"cmd": "repeat"}}
-    for n, word in enumerate(NUMBERS, 1):
-        out[f"клод сессия {word}"] = out[f"клод перейди на сессию {word}"] = {"cmd": "session", "n": n}
+def command_phrases(cfg):
+    """Voice commands (no end word): phrase -> the line emitted to the mod."""
+    out = {cfg["which_phrase"]: {"cmd": "which"}, cfg["clear_phrase"]: {"cmd": "clear"}, cfg["repeat_phrase"]: {"cmd": "repeat"}}
+    for n, word in enumerate(cfg["numbers"], 1):
+        for prefix in cfg["session_phrases"]:
+            out[f"{prefix} {word}"] = {"cmd": "session", "n": n}
     return out
 
 
@@ -97,7 +126,7 @@ def speech_pieces(text, min_len=25):
 
 # Leading "Клод" as whisper may spell it, stripped from the transcript; the
 # rest of the wake phrase ("приём") is stripped by clean().
-WAKE_PREFIX = re.compile(r"^\s*(клод|клот|клоуд|клауд|клод[ауе]|claude|clod|claud)\b" + PUNCT, re.I)
+WAKE_PREFIX = re.compile(r"^\s*(клод|клот|клоуд|клауд|клод[ауе]|claude|clod|claud|cloud)\b" + PUNCT, re.I)
 # What may follow "Клод" in the preroll of «Клод, текст»: stripped like "приём".
 TEXT_PREFIX = re.compile(r"^\s*(текст|text)\b" + PUNCT, re.I)
 
@@ -265,12 +294,15 @@ def desktop_log_path(cfg):
     return Path(cfg["desktop_log"] or Path(os.environ.get("LOCALAPPDATA", "")) / "Claude" / "Logs" / "main.log")
 
 
-def load_config():
-    cfg = dict(DEFAULTS)
-    p = HERE / "config.json"
-    if p.exists():
-        cfg.update(json.loads(p.read_text(encoding="utf-8")))
-    return cfg
+def load_config(user=None):
+    """DEFAULTS, then the chosen language's phrases, then config.json (or `user`)."""
+    if user is None:
+        p = HERE / "config.json"
+        user = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    lang = user.get("lang", DEFAULTS["lang"])
+    if lang not in LANGS:
+        sys.exit(f'config.json: "lang" is {lang!r}; use one of: {", ".join(LANGS)}')
+    return {**DEFAULTS, **LANGS[lang], **user}
 
 
 def clean(text, submit_word, end_word="приём"):
@@ -309,7 +341,12 @@ def selftest():
     assert speech_pieces("Key principles include KISS, DRY, YAGNI, statelessness, and the CAP theorem.") == [
         "Key principles include KISS,", "DRY, YAGNI, statelessness,", "and the CAP theorem."]
     assert speech_pieces("Done.") == ["Done."]
-    assert command_phrases()["клод перейди на сессию три"] == {"cmd": "session", "n": 3}
+    ru, en = load_config({}), load_config({"lang": "en", "end_word": "roger"})
+    assert command_phrases(ru)["клод перейди на сессию три"] == {"cmd": "session", "n": 3}
+    assert command_phrases(en)["claude switch to session three"] == {"cmd": "session", "n": 3}
+    assert (en["wake_phrase"], en["end_word"], en["language"]) == ("claude over", "roger", "en")  # config.json wins
+    assert clean("Claude, over. Fix the build, over.", en["submit_word"], "over") == ("Fix the build", False)
+    assert clean("Claude text. Buy milk. Over.", en["submit_word"], "over") == ("Buy milk", False)
     ids = {}
     desktop = [
         "2026-11-09 20:24:29 [info] Mapping internal session local_a1 to CLI session 91c0fcb7-0985",
@@ -345,7 +382,7 @@ def selftest():
 
     def heard(script):
         lst = Listener.__new__(Listener)
-        lst.wake, lst.stop, lst.commands, lst.stop_seen = "клод приём", "клод стоп", command_phrases(), 0
+        lst.wake, lst.stop, lst.commands, lst.stop_seen = "клод приём", "клод стоп", command_phrases(load_config({})), 0
         lst.text_only = "клод текст"
         lst.rec = Rec(script)
         return [lst.heard_phrase(Block()) for _ in script]
@@ -464,7 +501,7 @@ class Listener:
         self.end = cfg["end_word"].lower()
         self.stop = cfg["stop_phrase"].lower()
         self.text_only = cfg["text_phrase"].lower()
-        self.commands = command_phrases()
+        self.commands = command_phrases(cfg)
         self.last_said = ""  # for "клод повтори"
         self.stop_seen = 0  # blocks in a row whose partial result holds the stop phrase
         grammar = [self.wake, self.text_only, self.stop, *self.commands, "[unk]"]
@@ -737,9 +774,14 @@ def run_wav(cfg, path):
     lst = Listener(cfg)
     it = (data[i : i + BLOCK] for i in range(0, len(data), BLOCK))
     for b in it:
-        if lst.feed(b) == lst.wake:
-            log("wake word")
-            lst.handle(it)
+        phrase = lst.feed(b)
+        if phrase in (lst.wake, lst.text_only):
+            log(f"wake phrase: {phrase}")
+            lst.handle(it, insert_only=phrase == lst.text_only)
+        elif phrase == lst.stop:
+            emit({"stop": True})
+        elif phrase in lst.commands:
+            emit(lst.commands[phrase])
     lst.rec.Reset()
 
 

@@ -4,7 +4,13 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { BandView, Phase, VoiceSession } from '../types'
 
 // Where listener/ lives: beside the mod folder when loaded from the repo
-// (CLAUDE_CODE_PLUGIN_DIRS=<repo>/mod), else $VOICE_WAKE_LISTENER_DIR.
+// (CLAUDE_CODE_PLUGIN_DIRS=<repo>/mod), else $VOICE_WAKE_LISTENER_DIR, else the
+// marketplace's clone: `claude plugin install` copies only mod/ into a versioned
+// cache, while the marketplace keeps the whole repo at a stable path (and its
+// updates keep the ignored .venv/ and models/).
+const MARKETPLACE_LISTENER = '.claude/plugins/marketplaces/claude-voice/listener'
+// Where install.py is for someone who installed from the marketplace (a clone: listener/install.py).
+const INSTALL_HINT = `%USERPROFILE%/${MARKETPLACE_LISTENER}/install.py`
 const BUSY_RETRY_MS = 30_000
 const HEARTBEAT_MS = 5_000
 const STALE_MS = 20_000 // a session not heard from this long counts as closed
@@ -20,18 +26,135 @@ const phase = atom({ plugin: 'voice-wake', key: 'phase' } as const, 'off', { sha
 const sessions = atom({ plugin: 'voice-wake', key: 'sessions' } as const, [], { shape: 'sessions-4' })
 const view = atom({ plugin: 'voice-wake', key: 'view' } as const, { said: '', err: '', elapsed: 0 }, { shape: 'view-2' })
 
-const STATUS: Record<Phase, string> = {
-  off: '🎙 off',
-  loading: '🎙 loading…',
-  listening: '🎙 listening',
-  recording: '🎙 ● запись',
-  transcribing: '🎙 распознаю…',
-  speaking: '🔊 говорю…',
-  busy: '🎙 busy (другой сеанс)',
-  restarting: '🎙 restarting…',
-  error: '🎙 error',
-  'not-installed': '🎙 not installed',
+// Everything the mod shows, per language. The listener's config.json "lang" picks
+// it (the same key that picks the voice phrases); English until a listener is found.
+type Lang = 'ru' | 'en'
+const UI = {
+  ru: {
+    status: {
+      off: '🎙 off',
+      loading: '🎙 loading…',
+      listening: '🎙 listening',
+      recording: '🎙 ● запись',
+      transcribing: '🎙 распознаю…',
+      speaking: '🔊 говорю…',
+      busy: '🎙 busy (другой сеанс)',
+      restarting: '🎙 restarting…',
+      error: '🎙 error',
+      'not-installed': '🎙 not installed',
+    } as Record<Phase, string>,
+    dropped: (why: string) => `🎙 Не отправилось (${why}): текст в поле ввода, нажми Enter`,
+    stopped: '🎙 Остановлено',
+    notFilled: (why: string, text: string) => `🎙 не вставилось (${why}): ${text}`,
+    notTaken: (name: string) => `🎙 сессия ${name} не приняла голос: текст здесь`,
+    on: 'Голосовой ввод включён: скажи «Клод приём», сообщение и «приём» в конце.',
+    off: 'Голосовой ввод выключен (во всех сеансах).',
+    paneTitle: 'Голосовой ввод: сессии',
+    cmdToggle: 'Голосовой ввод «Клод приём»: включить / выключить',
+    cmdOn: 'Голосовой ввод: включить во всех сеансах',
+    cmdOff: 'Голосовой ввод: выключить во всех сеансах (микрофон, речь)',
+    cmdTo: 'Куда идёт голосовой ввод: без аргумента — список сессий, с номером — выбрать',
+    cmdToHint: '[номер сессии]',
+    self: 'эта',
+    shown: 'на экране',
+    mic: 'микрофон',
+    voiceHere: ' ← голос сюда',
+    noSessions: 'Нет сессий с модом.',
+    noSuch: (n: number, count: number) => `Нет сессии №${n}: их ${count}.`,
+    nowTo: (name: string) => `Голосовой ввод теперь идёт в: ${name}`,
+    paneHead: 'Куда идёт голос',
+    paneNote:
+      'Голос идёт в сессию на экране Claude Desktop. Выбор здесь открывает сессию и держится, пока не переключишься на другую. Номер = /claude-voice-to n или «Клод, сессия n».',
+    toSelf: '→ эта сессия',
+    turnOff: 'Выключить',
+    turnOffAll: 'Выключить везде',
+    turnOn: 'Включить',
+    listening: '🎙 Слушаю',
+    sayWake: 'скажи «Клод, приём»',
+    dictate: 'Диктовать',
+    recording: '● Запись',
+    sayEnd: 'закончи словом «приём»',
+    done: 'Готово',
+    transcribing: '🎙 Распознаю',
+    textComes: 'текст появится в поле ввода',
+    speaking: '🔊 Говорю',
+    hush: 'Замолчать',
+    loading: '🎙 Загружаю модели',
+    loadingHint: 'Vosk и Whisper, первый запуск дольше',
+    restarting: '🎙 Перезапускаю слушатель',
+    micAt: '🎙 Микрофон у сессии',
+    otherSession: 'другого сеанса Claude',
+    voiceHereBtn: 'Голос сюда',
+    crashed: '🎙 Слушатель упал',
+    crashHint: 'подробности в listener/listen.log',
+    restart: 'Перезапустить',
+    install: '🎙 Нужна установка',
+    isOff: '🎙 Голосовой ввод выключен',
+  },
+  en: {
+    status: {
+      off: '🎙 off',
+      loading: '🎙 loading…',
+      listening: '🎙 listening',
+      recording: '🎙 ● recording',
+      transcribing: '🎙 transcribing…',
+      speaking: '🔊 speaking…',
+      busy: '🎙 busy (another session)',
+      restarting: '🎙 restarting…',
+      error: '🎙 error',
+      'not-installed': '🎙 not installed',
+    } as Record<Phase, string>,
+    dropped: (why: string) => `🎙 Not sent (${why}): the text is in the prompt box, press Enter`,
+    stopped: '🎙 Stopped',
+    notFilled: (why: string, text: string) => `🎙 could not insert (${why}): ${text}`,
+    notTaken: (name: string) => `🎙 session ${name} did not take the voice input: it is here`,
+    on: 'Voice input on: say "Claude, over", your message, and "over" at the end.',
+    off: 'Voice input off (in every session).',
+    paneTitle: 'Voice input: sessions',
+    cmdToggle: 'Voice input ("Claude, over"): turn on / off',
+    cmdOn: 'Voice input: turn on in every session',
+    cmdOff: 'Voice input: turn off in every session (mic, speech)',
+    cmdTo: 'Where voice input goes: no argument lists the sessions, a number picks one',
+    cmdToHint: '[session number]',
+    self: 'this',
+    shown: 'on screen',
+    mic: 'mic',
+    voiceHere: ' ← voice goes here',
+    noSessions: 'No sessions with the mod.',
+    noSuch: (n: number, count: number) => `No session #${n}: there are ${count}.`,
+    nowTo: (name: string) => `Voice input now goes to: ${name}`,
+    paneHead: 'Where voice goes',
+    paneNote:
+      'Voice goes to the session on screen in Claude Desktop. A choice here opens that session and holds until you switch to another. Number = /claude-voice-to n or "Claude, session n".',
+    toSelf: '→ this session',
+    turnOff: 'Turn off',
+    turnOffAll: 'Turn off everywhere',
+    turnOn: 'Turn on',
+    listening: '🎙 Listening',
+    sayWake: 'say "Claude, over"',
+    dictate: 'Dictate',
+    recording: '● Recording',
+    sayEnd: 'end with "over"',
+    done: 'Done',
+    transcribing: '🎙 Transcribing',
+    textComes: 'the text will appear in the prompt box',
+    speaking: '🔊 Speaking',
+    hush: 'Hush',
+    loading: '🎙 Loading models',
+    loadingHint: 'Vosk and Whisper, the first start takes longer',
+    restarting: '🎙 Restarting the listener',
+    micAt: '🎙 The mic is with',
+    otherSession: 'another Claude session',
+    voiceHereBtn: 'Voice here',
+    crashed: '🎙 The listener crashed',
+    crashHint: 'details in listener/listen.log',
+    restart: 'Restart',
+    install: '🎙 Install needed',
+    isOff: '🎙 Voice input off',
+  },
 }
+let lang: Lang = 'en'
+const t = () => UI[lang]
 
 // A listener line. `cmd` comes from a voice command (no end word): «Клод, какая сессия»
 // (which), «Клод, сессия три» (session, n), «Клод, сотри» (clear the prompt box).
@@ -111,12 +234,10 @@ async function voiceTarget($: EngineInterface) {
 async function refreshSessions($: EngineInterface) {
   if (!dir) return
   const { alive, target, owner, shown } = await voiceTarget($)
-  // This session first, then the others in the order they appeared: a new one
-  // goes last, so the numbers already shown stay. The place is /claude-voice-to's number.
-  const order = alive.sort(
-    (a, b) =>
-      Number(b.id === selfId) - Number(a.id === selfId) || (a.since ?? 0) - (b.since ?? 0) || a.id.localeCompare(b.id),
-  )
+  // In the order they appeared, the same list in every session: a new one goes
+  // last, so the numbers already shown stay. The place is /claude-voice-to's and
+  // «Клод, сессия n»'s number.
+  const order = alive.sort((a, b) => (a.since ?? 0) - (b.since ?? 0) || a.id.localeCompare(b.id))
   const names = order.map(where)
   const list: VoiceSession[] = order.map((e, i) => ({
     id: e.id,
@@ -158,7 +279,29 @@ async function heartbeat($: EngineInterface, closed = false) {
   const folder = cwd.split(/[\\/]/).filter(Boolean).pop() ?? ''
   const entry: Entry = { id: selfId, folder, label, seen: await $.clock.now(), since, ...(await gitInfo($, cwd)) }
   await $.fs.write(`${reg()}/${selfId}.json`, JSON.stringify(closed ? { ...entry, closed } : entry))
-  if (!closed) await refreshSessions($)
+  if (closed) return releaseMic($)
+  await refreshSessions($)
+  await followSwitch($)
+}
+
+/** The on/off switch is one for every session ($.store is shared): a session
+ * without a listener follows it here — off when it was turned off elsewhere, and
+ * a busy one takes the mic at once when its holder let go. */
+async function followSwitch($: EngineInterface) {
+  if (child) return
+  const p = await read($, phase)
+  if (!(await isEnabled($))) {
+    if (p !== 'off' && p !== 'not-installed') await setPhase($, 'off')
+  } else if (p === 'off' || (p === 'busy' && !(await $.fs.read(`${reg()}/owner`).then(t => t.trim(), () => '')))) {
+    void run($)
+  }
+}
+
+/** This session's listener is gone: the mic is nobody's until another one starts. */
+async function releaseMic($: EngineInterface) {
+  if (!dir) return
+  const owner = await $.fs.read(`${reg()}/owner`).then(t => t.trim(), () => '')
+  if (owner === selfId) await $.fs.write(`${reg()}/owner`, '')
 }
 
 /** Send voice to session `id` and put it on screen in Claude Desktop. Choosing
@@ -202,7 +345,7 @@ async function checkInbox($: EngineInterface) {
 }
 
 async function setPhase($: EngineInterface, p: Phase) {
-  $.ui.status(STATUS[p])
+  $.ui.status(t().status[p])
   recTimer?.cancel()
   recTimer = undefined
   if (p === 'recording') {
@@ -220,7 +363,8 @@ async function setPhase($: EngineInterface, p: Phase) {
 
 async function listenerDir($: EngineInterface): Promise<string | undefined> {
   const fallback = await $.env.get('VOICE_WAKE_LISTENER_DIR')
-  for (const d of [`${$.plugin.root}/../listener`, fallback]) {
+  const home = await $.env.get('USERPROFILE')
+  for (const d of [`${$.plugin.root}/../listener`, fallback, home && `${home}/${MARKETPLACE_LISTENER}`]) {
     if (!d) continue
     const st = await $.fs.stat(`${d}/.venv/Scripts/python.exe`).catch(() => undefined)
     if (st) return d
@@ -244,7 +388,7 @@ function spokenLine(answer: string): string | undefined {
 async function giveBack($: EngineInterface, text: string, why: string) {
   const box = await $.prompt.read()
   await $.prompt.fill({ text: [box.text.trim(), text].filter(Boolean).join(' '), mode: 'replace' })
-  $.ui.toast(`🎙 Не отправилось (${why}): текст в поле ввода, нажми Enter`)
+  $.ui.toast(t().dropped(why))
   $.ui.log(`voice-wake: prompt dropped: ${why}`)
 }
 
@@ -280,7 +424,7 @@ async function deliver($: EngineInterface, line: Line) {
   if (line.stop) {
     if (!runningTurn) return
     await $.turn.abort({ turnId: runningTurn }).catch(() => undefined) // it may have just ended
-    $.ui.toast('🎙 Остановлено')
+    $.ui.toast(t().stopped)
     return
   }
   const spoken = line.text?.trim() ?? ''
@@ -302,7 +446,7 @@ async function deliver($: EngineInterface, line: Line) {
   const before = box.text.slice(0, box.cursor)
   const sep = before && !/\s$/.test(before) ? ' ' : ''
   const filled = await $.prompt.fill({ text: sep + spoken, mode: 'insert' })
-  if (!filled.isFilled) $.ui.toast(`🎙 не вставилось (${filled.refusal ?? 'unknown'}): ${spoken}`)
+  if (!filled.isFilled) $.ui.toast(t().notFilled(filled.refusal ?? 'unknown', spoken))
 }
 
 /** Deliver here, or to the session voice goes to (`voiceTarget`). */
@@ -316,7 +460,7 @@ async function route($: EngineInterface, line: Line) {
       // No ack in time (the session hangs, an old mod there): deliver here instead.
       $.clock.after(ACK_MS, async () => {
         if (Number(await $.fs.read(`${reg()}/${target}.ack`).catch(() => '0')) >= seq) return
-        $.ui.toast(`🎙 сессия ${where(entry)} не приняла голос: текст здесь`)
+        $.ui.toast(t().notTaken(where(entry)))
         await deliver($, line)
       })
       return
@@ -325,11 +469,23 @@ async function route($: EngineInterface, line: Line) {
   await deliver($, line)
 }
 
+let starting = false // run() between its check and the spawn: two calls would start two listeners
+
 async function run($: EngineInterface) {
-  if (child || !(await isEnabled($))) return
+  if (child || starting) return
+  starting = true
+  try {
+    await start($)
+  } finally {
+    starting = false
+  }
+}
+
+async function start($: EngineInterface) {
+  if (!(await isEnabled($))) return setPhase($, 'off') // turned off in another session meanwhile
   if (!dir) {
     await setPhase($, 'not-installed')
-    $.ui.log(`voice-wake: no listener venv found; run python listener/install.py`)
+    $.ui.log(`voice-wake: no listener venv found; run python ${INSTALL_HINT}`)
     return
   }
   await setPhase($, 'loading')
@@ -339,6 +495,7 @@ async function run($: EngineInterface) {
     env: { PYTHONIOENCODING: 'utf-8' },
   })
   child = proc
+  starting = false
   const startedAt = await $.clock.now()
   let buf = ''
   let busy = false
@@ -376,6 +533,7 @@ async function run($: EngineInterface) {
   }
   const stoppedByUs = child !== proc
   if (child === proc) child = undefined
+  if (!busy) await releaseMic($)
   if (stoppedByUs || !(await isEnabled($))) return
   if (busy) {
     // Another session owns the mic; take over once it lets go.
@@ -401,6 +559,7 @@ async function setEnabled($: EngineInterface, enable: boolean) {
   const proc = child
   child = undefined
   void proc?.return(undefined)
+  if (proc) await releaseMic($)
   await setPhase($, 'off')
 }
 
@@ -411,25 +570,21 @@ async function send($: EngineInterface, cmd: 'dictate' | 'stop') {
 /** /claude-voice, -on, -off: the setting is shared by every session. */
 async function toggle($: EngineInterface, enable: boolean) {
   void setEnabled($, enable)
-  return enable
-    ? { text: 'Голосовой ввод включён: скажи «Клод приём», сообщение и «приём» в конце.' }
-    : { text: 'Голосовой ввод выключен (во всех сеансах).' }
+  return { text: enable ? t().on : t().off }
 }
 
-const openPane = ($: EngineInterface) => $.ui.open({ id: PANE, title: 'Голосовой ввод: сессии' })
+const openPane = ($: EngineInterface) => $.ui.open({ id: PANE, title: t().paneTitle })
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    await $.command.register({ name: 'claude-voice', description: 'Голосовой ввод «Клод приём»: включить / выключить' })
-    await $.command.register({ name: 'claude-voice-on', description: 'Голосовой ввод: включить во всех сеансах' })
-    await $.command.register({ name: 'claude-voice-off', description: 'Голосовой ввод: выключить во всех сеансах (микрофон, речь)' })
-    await $.command.register({
-      name: 'claude-voice-to',
-      description: 'Куда идёт голосовой ввод: без аргумента — список сессий, с номером — выбрать',
-      argumentHint: '[номер сессии]',
-    })
     dir = await listenerDir($)
+    // The listener's own default is "ru" (no config.json, or no "lang" in it).
+    if (dir) lang = (await readJson<{ lang?: string }>($, `${dir}/config.json`))?.lang === 'en' ? 'en' : 'ru'
+    await $.command.register({ name: 'claude-voice', description: t().cmdToggle })
+    await $.command.register({ name: 'claude-voice-on', description: t().cmdOn })
+    await $.command.register({ name: 'claude-voice-off', description: t().cmdOff })
+    await $.command.register({ name: 'claude-voice-to', description: t().cmdTo, argumentHint: t().cmdToHint })
     selfId = await $.session.id()
     if (dir) {
       const old = await readJson<Entry>($, `${reg()}/${selfId}.json`)
@@ -492,28 +647,27 @@ export const register: Register = on => {
     const n = Number.parseInt(e.args.trim(), 10)
     if (Number.isNaN(n)) {
       void openPane($)
-      const tags = (s: VoiceSession) => [s.isSelf && 'эта', s.isShown && 'на экране', s.hasMic && 'микрофон'].filter(Boolean).join(', ')
+      const tags = (s: VoiceSession) => [s.isSelf && t().self, s.isShown && t().shown, s.hasMic && t().mic].filter(Boolean).join(', ')
       return {
         text:
-          list.map((s, i) => `${i + 1}. ${s.name}${tags(s) ? ` (${tags(s)})` : ''}${s.isTarget ? ' ← голос сюда' : ''}`).join('\n') ||
-          'Нет сессий с модом.',
+          list.map((s, i) => `${i + 1}. ${s.name}${tags(s) ? ` (${tags(s)})` : ''}${s.isTarget ? t().voiceHere : ''}`).join('\n') ||
+          t().noSessions,
       }
     }
     const chosen = list[n - 1]
-    if (!chosen) return { text: `Нет сессии №${n}: их ${list.length}.` }
+    if (!chosen) return { text: t().noSuch(n, list.length) }
     await select($, chosen.id)
-    return { text: `Голосовой ввод теперь идёт в: ${chosen.name}` }
+    return { text: t().nowTo(chosen.name) }
   })
 
-  // The sessions pane: this session first, then the others in the order they
-  // appeared; the number is the one /claude-voice-to and «Клод, сессия n» take, and its hotkey.
+  // The sessions pane: in the order they appeared, the same in every session; the number is the one /claude-voice-to and «Клод, сессия n» take, and its hotkey.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const list = await read($, sessions)
     return (
       <Box flexDirection="column" gap={1}>
         <Text bold dimColor>
-          Куда идёт голос
+          {t().paneHead}
         </Text>
         <Box flexDirection="column">
           {list.map((s, i) => (
@@ -526,22 +680,19 @@ export const register: Register = on => {
               {s.isTarget ? '✓ ' : '   '}
               {`${i + 1}. ${s.name} `}
               <Text dimColor>
-                {[s.isSelf ? 'эта' : '', s.isShown ? 'на экране' : '', s.hasMic ? '🎙 микрофон' : ''].filter(Boolean).join(' · ')}
+                {[s.isSelf ? t().self : '', s.isShown ? t().shown : '', s.hasMic ? `🎙 ${t().mic}` : ''].filter(Boolean).join(' · ')}
               </Text>
             </Button>
           ))}
         </Box>
-        {list.length === 0 && <Text dimColor>Нет сессий с модом.</Text>}
-        <Text dimColor>
-          Голос идёт в сессию на экране Claude Desktop. Выбор здесь открывает сессию и держится, пока не переключишься
-          на другую. Номер = /claude-voice-to n или «Клод, сессия n».
-        </Text>
+        {list.length === 0 && <Text dimColor>{t().noSessions}</Text>}
+        <Text dimColor>{t().paneNote}</Text>
       </Box>
     )
   })
 
   // The band above the prompt: one frame for every state — what the listener
-  // does, where voice goes (always), the main button, «Выключить» last and dim.
+  // does, where voice goes (always), the main button, Turn off last and dim.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
@@ -552,12 +703,12 @@ export const register: Register = on => {
     const toPane = () => void openPane($)
     const chip = (
       <Button key="target" dimColor onPress={toPane}>
-        {!target || target.isSelf ? '→ эта сессия' : `→ ${target.name}`}
+        {!target || target.isSelf ? t().toSelf : `→ ${target.name}`}
       </Button>
     )
-    const turnOff = <Button key="Выключить" label="Выключить" dimColor onPress={() => void setEnabled($, false)} />
-    const btn = (name: string, press: () => void) => (
-      <Button key={name} label={name} variant="primary" onPress={press} />
+    const turnOff = <Button key="off" label={t().turnOff} dimColor onPress={() => void setEnabled($, false)} />
+    const btn = (key: string, label: string, press: () => void) => (
+      <Button key={key} label={label} variant="primary" onPress={press} />
     )
     const row = (o: { title: string; hint?: string; color?: string; dim?: boolean; parts?: (typeof chip)[] }) => (
       <Box gap={1} alignItems="center">
@@ -571,33 +722,33 @@ export const register: Register = on => {
     const mmss = `${Math.floor(v.elapsed / 60)}:${String(v.elapsed % 60).padStart(2, '0')}`
     switch (p) {
       case 'listening':
-        return row({ title: '🎙 Слушаю', hint: 'скажи «Клод, приём»', parts: [chip, btn('Диктовать', () => void send($, 'dictate')), turnOff] })
+        return row({ title: t().listening, hint: t().sayWake, parts: [chip, btn('dictate', t().dictate, () => void send($, 'dictate')), turnOff] })
       case 'recording':
-        return row({ title: `● Запись ${mmss}`, color: 'red', hint: 'закончи словом «приём»', parts: [chip, btn('Готово', () => void send($, 'stop'))] })
+        return row({ title: `${t().recording} ${mmss}`, color: 'red', hint: t().sayEnd, parts: [chip, btn('done', t().done, () => void send($, 'stop'))] })
       case 'transcribing':
-        return row({ title: '🎙 Распознаю', hint: 'текст появится в поле ввода', parts: [chip] })
+        return row({ title: t().transcribing, hint: t().textComes, parts: [chip] })
       case 'speaking':
-        return row({ title: '🔊 Говорю', hint: v.said ? `«${v.said}»` : undefined, parts: [btn('Замолчать', () => void send($, 'stop'))] })
+        return row({ title: t().speaking, hint: v.said ? `«${v.said}»` : undefined, parts: [btn('hush', t().hush, () => void send($, 'stop'))] })
       case 'loading':
-        return row({ title: '🎙 Загружаю модели', hint: 'Vosk и Whisper, первый запуск дольше', parts: [turnOff] })
+        return row({ title: t().loading, hint: t().loadingHint, parts: [turnOff] })
       case 'restarting':
-        return row({ title: '🎙 Перезапускаю слушатель', parts: [turnOff] })
+        return row({ title: t().restarting, parts: [turnOff] })
       case 'busy': {
         const mic = list.find(s => s.hasMic)
-        const here = target?.isSelf ? [chip] : [btn('Голос сюда', () => void select($, selfId))]
+        const here = target?.isSelf ? [chip] : [btn('here', t().voiceHereBtn, () => void select($, selfId))]
         return row({
-          title: '🎙 Микрофон у сессии',
+          title: t().micAt,
           color: 'yellow',
-          hint: mic ? mic.name : 'другого сеанса Claude',
-          parts: [...here, <Button key="Выключить везде" label="Выключить везде" dimColor onPress={() => void setEnabled($, false)} />],
+          hint: mic ? mic.name : t().otherSession,
+          parts: [...here, <Button key="off-all" label={t().turnOffAll} dimColor onPress={() => void setEnabled($, false)} />],
         })
       }
       case 'error':
-        return row({ title: '🎙 Слушатель упал', color: 'red', hint: v.err || 'подробности в listener/listen.log', parts: [btn('Перезапустить', () => void setEnabled($, true))] })
+        return row({ title: t().crashed, color: 'red', hint: v.err || t().crashHint, parts: [btn('restart', t().restart, () => void setEnabled($, true))] })
       case 'not-installed':
-        return row({ title: '🎙 Нужна установка', hint: 'python listener/install.py' })
+        return row({ title: t().install, hint: `python ${INSTALL_HINT}` })
       case 'off':
-        return row({ title: '🎙 Голосовой ввод выключен', dim: true, parts: [<Button key="Включить" label="Включить" onPress={() => void setEnabled($, true)} />] })
+        return row({ title: t().isOff, dim: true, parts: [<Button key="on" label={t().turnOn} onPress={() => void setEnabled($, true)} />] })
     }
   })
 }

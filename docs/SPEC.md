@@ -1,205 +1,214 @@
-# voice-wake — спецификация
+# voice-wake: specification
 
-Голосовой ввод для Claude Code Desktop: «Клод, приём» → сообщение → «приём», и текст
-уходит в Claude как промпт пользователя. Ответ Claude начинается строкой `🔊 …`,
-которую читает голос. Всё офлайн, на Windows.
+[Русская версия](SPEC.ru.md)
 
-Исходники: https://github.com/aitkazeen/claude-voice (MIT). Эта спека — для другого
-проекта, который хочет (А) пользоваться голосовым вводом в своих сессиях Claude или
-(Б) переиспользовать слушатель или приёмы отсюда в своём коде.
+Voice input for Claude Code Desktop: "Claude, over" → message → "over", and the text
+goes to Claude as the user's prompt. Claude's reply starts with a `🔊 …` line that a
+voice reads. Fully offline, on Windows. Phrases in English or Russian (`"lang"`).
+
+Source: https://github.com/aitkazeen/claude-voice (MIT). This spec is for another
+project that wants to (A) use voice input in its Claude sessions or (B) reuse the
+listener, or techniques from it, in its own code.
 
 ---
 
-## 1. Что умеет
+## 1. What it does
 
-| Сказал | Результат |
+Phrases for `"lang": "en"`; the Russian ones are in [README.ru.md](../README.ru.md).
+
+| Say | Result |
 | --- | --- |
-| «Клод, приём» … «текст, приём» | текст (вместе с тем, что уже было в поле) **отправляется** в Claude |
-| «Клод, текст» … «текст, приём» | текст только **вставляется** в поле ввода |
-| «Клод, стоп» | прерывает ход Claude (как Esc), обрывает озвучку, выбрасывает идущую запись |
-| «Клод, сессия три» / «Клод, перейди на сессию три» | голос теперь идёт в сессию № 3 (1–9) |
-| «Клод, какая сессия» | голосом: куда идёт ввод |
-| «Клод, повтори» | повторить последнюю озвученную фразу |
-| «Клод, сотри» | очистить поле ввода |
-| … «отмена» (во время записи) | запись выбрасывается |
+| "Claude, over" … "text, over" | the text (with whatever was in the box) is **sent** to Claude |
+| "Claude, text" … "text, over" | the text is only **inserted** into the prompt box |
+| "Claude, stop" | stops Claude's turn (like Esc), cuts speech off, drops a recording in progress |
+| "Claude, session three" / "Claude, switch to session three" | voice now goes to session 3 (1–9) |
+| "Claude, which session" | says aloud where voice goes |
+| "Claude, repeat" | repeats the last spoken line |
+| "Claude, clear" | empties the prompt box |
+| … "cancel" (during a recording) | the recording is dropped |
 
-Паузы внутри сообщения не мешают: запись кончается только на «приём» (или кнопкой
-«Готово», или через 5 мин — тогда текст только вставляется).
-Голосовые промпты уходят с префиксом `🎙`; на них Claude начинает ответ строкой
-`🔊 <одно английское предложение до 50 слов>`, её читает Kokoro (`bf_emma`).
+Pauses inside a message are fine: the recording ends only on "over" (or the Done
+button, or after 5 min, when the text is only inserted). Voice prompts are sent with a
+`🎙` prefix; for those Claude starts its reply with `🔊 <one English sentence, up to 50
+words>`, read by Kokoro (`bf_emma`).
 
 ---
 
-## 2. Архитектура
+## 2. Architecture
 
 ```
- микрофон
-    │
- listener/listen.py  (Python, один на машину; держит порт 127.0.0.1:47821 как замок)
-    │  Vosk: ждёт фразы (грамматика из ~25 фраз) ─► запись ─► Vosk отмечает паузы
-    │  на каждой паузе faster-whisper читает хвост: кончается на «приём»? ─► конец
-    │  faster-whisper (GPU/CPU) распознаёт всё ─► clean() ─► stdout JSON-строка
-    │  поток follow_desktop: читает лог Claude Desktop ─► какая сессия на экране
-    │  Kokoro TTS: читает файл listener/say
-    ▼ stdout (JSON lines)                     ▲ файлы cmd / say
- mod/hooks/register.tsx  (мод Claude Code; загружен в КАЖДОЙ сессии Desktop)
-    │  сессия, чей слушатель держит микрофон, получает строки и маршрутизирует:
-    │  ├─ цель = эта сессия ─► $.prompt.submit / $.prompt.fill
-    │  └─ цель = другая     ─► listener/sessions/<id>.inbox ─► та сессия забирает
-    ▼
- Claude (промпт «🎙 …» как от пользователя) ─► ответ «🔊 …» ─► listener/say ─► голос
+ mic
+  │
+ listener/listen.py  (Python, one per machine; holds port 127.0.0.1:47821 as a lock)
+  │  Vosk: waits for a phrase (a grammar of ~25 phrases) ─► recording ─► Vosk marks pauses
+  │  at every pause faster-whisper reads the tail: ends with "over"? ─► end
+  │  faster-whisper (GPU/CPU) transcribes it all ─► clean() ─► one stdout JSON line
+  │  follow_desktop thread: reads Claude Desktop's log ─► which session is on screen
+  │  Kokoro TTS: reads the file listener/say
+  ▼ stdout (JSON lines)                     ▲ files cmd / say
+ mod/hooks/register.tsx  (a Claude Code mod; loaded in EVERY Desktop session)
+  │  the session whose listener holds the mic gets the lines and routes them:
+  │  ├─ target = this session ─► $.prompt.submit / $.prompt.fill
+  │  └─ target = another      ─► listener/sessions/<id>.inbox ─► that session takes it
+  ▼
+ Claude (prompt "🎙 …" as from the user) ─► reply "🔊 …" ─► listener/say ─► voice
 ```
 
-Два процесса, связь только через stdout слушателя и файлы в `listener/`. Мод
-запускает слушатель как дочерний процесс (`$.process.spawn`) в каждой сессии;
-сработает только первый (замок-порт), остальные получают `busy` и пробуют снова
-каждые 30 с.
+Two processes, linked only by the listener's stdout and files in `listener/`. The mod
+spawns the listener as a child process (`$.process.spawn`) in every session; only the
+first one wins (the port lock), the others get `busy` and retry every 30 s.
 
 ---
 
-## 3. Слушатель (`listener/listen.py`)
+## 3. The listener (`listener/listen.py`)
 
-### Конвейер
-1. **Ожидание фразы.** Vosk `vosk-model-small-ru-0.22` с грамматикой только из фраз
-   активации и команд (+`[unk]`): дёшево, мало ложных срабатываний. «Клод, стоп»
-   срабатывает по 3 одинаковым частичным результатам подряд, без паузы; остальное —
-   по финальному результату (после паузы). Буфер `preroll_sec` (1 с) звука до
-   срабатывания попадает в запись.
-2. **Запись до «приём».** Второй распознаватель Vosk (свободное декодирование) нужен
-   только чтобы отмечать паузы, без порога громкости. На каждой паузе whisper
-   распознаёт речь с прошлой паузы (+0,3 с перекрытия) и проверяет, кончается ли она
-   на `end_word` или `cancel_word`. Догадке Vosk про «приём» не верим: с одной
-   фразой в грамматике он слышит её где попало.
-3. **Распознавание.** faster-whisper `small`: `beam_size=5`, `vad_filter=True`,
-   `condition_on_previous_text=False`, `initial_prompt` — словарь частых терминов
-   (в нём **нет** слова «приём»: на тишине whisper иногда повторяет подсказку, и
-   «приём» отправил бы сообщение). На NVIDIA — `cuda/float16` (DLL из pip-пакетов
-   `nvidia-cublas-cu12`, `nvidia-cudnn-cu12`, добавляются через
-   `os.add_dll_directory`), иначе `cpu/int8`. Проверка GPU — прогон 1 с тишины:
-   отсутствующая DLL проявляется только на первом распознавании.
-4. **Очистка (`clean`).** Убирает «Клод»/«Claude»/варианты в начале, «приём»
-   в начале и в конце, `submit_word` в конце. `word_re` принимает «е» вместо «ё»
-   и «е» вместо «и» (whisper пишет «прием», «преем»). Первая буква — заглавная.
-5. **Выдача.** JSON-строка в stdout, писк, toast Windows.
+### Pipeline
+1. **Waiting for a phrase.** Vosk (`vosk-model-small-en-us-0.15` or
+   `vosk-model-small-ru-0.22`, per `"lang"`) with a grammar of only the wake and
+   command phrases (+`[unk]`): cheap, few false triggers. "Claude, stop" fires on 3
+   identical partial results in a row, without a pause; everything else on a final
+   result (after a pause). `preroll_sec` (1 s) of audio before the trigger goes into
+   the recording.
+2. **Recording until "over".** A second Vosk recognizer (free decoding) only marks
+   pauses, with no loudness threshold. At every pause whisper transcribes the speech
+   since the previous pause (+0.3 s overlap) and checks whether it ends with `end_word`
+   or `cancel_word`. Vosk's own guess of the end word is not trusted: with a one-phrase
+   grammar it hears it everywhere.
+3. **Transcription.** faster-whisper `small`: `beam_size=5`, `vad_filter=True`,
+   `condition_on_previous_text=False`, `initial_prompt` a list of frequent terms (it
+   does **not** contain the end word: on silence whisper sometimes echoes the prompt,
+   and an echoed end word would send). On NVIDIA `cuda/float16` (DLLs from the pip
+   packages `nvidia-cublas-cu12`, `nvidia-cudnn-cu12`, added with
+   `os.add_dll_directory`), else `cpu/int8`. The GPU is checked by transcribing 1 s of
+   silence: a missing DLL only shows on the first transcription.
+4. **Cleanup (`clean`).** Strips "Claude" and its misspellings at the start, the end
+   word at the start and at the end, `submit_word` at the end. `word_re` takes "е" for
+   "ё" and for "и" (whisper writes «прием», «преем»). The first letter is capitalized.
+5. **Output.** A JSON line on stdout, a beep, a Windows toast.
 
-### Протокол stdout (одна JSON-строка = одно событие)
-| Строка | Значит |
+### stdout protocol (one JSON line = one event)
+| Line | Means |
 | --- | --- |
-| `{"status": "ready"}` | слушает фразу; мод записывает себя в `sessions/owner` |
-| `{"status": "recording"}` / `"transcribing"` / `"speaking"` | фаза для UI |
-| `{"status": "busy"}` | микрофон у другого процесса; слушатель выходит с кодом 3 |
-| `{"text": "…", "submit": true\|false}` | распознанное сообщение |
-| `{"stop": true}` | «Клод, стоп» |
-| `{"cmd": "which"}`, `{"cmd": "session", "n": 3}`, `{"cmd": "clear"}` | голосовые команды |
+| `{"status": "ready"}` | listening for a phrase; the mod writes itself into `sessions/owner` |
+| `{"status": "recording"}` / `"transcribing"` / `"speaking"` | phase, for the UI |
+| `{"status": "busy"}` | another process has the mic; the listener exits with code 3 |
+| `{"text": "…", "submit": true\|false}` | a transcribed message |
+| `{"stop": true}` | "Claude, stop" |
+| `{"cmd": "which"}`, `{"cmd": "session", "n": 3}`, `{"cmd": "clear"}` | voice commands |
 
-Логи — в stderr и `listener/listen.log` (перезаписывается при запуске).
+Logs go to stderr and `listener/listen.log` (rewritten on start).
 
-### Файлы-каналы от мода к слушателю
-- `listener/cmd` — `dictate` (начать запись без фразы) или `stop` (закончить запись /
-  замолчать). Слушатель читает и удаляет.
-- `listener/say` — текст, который прочитать голосом (читает и удаляет);
-  `listener/said` — он же для показа в UI.
+### Channel files from the mod to the listener
+- `listener/cmd`: `dictate` (start recording without a phrase) or `stop` (end the
+  recording / hush). The listener reads and deletes it.
+- `listener/say`: text to speak (read and deleted); `listener/said`: the same, for the
+  UI to show.
 
-### Жизнь процесса
-- Замок: `bind(127.0.0.1:47821)` без `listen` — ОС снимет его, когда процесс умрёт.
-- `exit_with_parent`: выходит, когда умирает родитель **или дед** (на Windows
-  `venv\Scripts\python.exe` — лаунчер, настоящий интерпретатор — его ребёнок).
-- Режимы: `--selftest` (правила текста, разбор лога Desktop), `--wav file.wav`,
-  `--levels` (громкость микрофона), `--say "text"`.
+### Process life
+- Lock: `bind(127.0.0.1:47821)` without `listen`; the OS frees it when the process dies.
+- `exit_with_parent`: exits when the parent **or the grandparent** dies (on Windows
+  `venv\Scripts\python.exe` is a launcher; the real interpreter is its child).
+- Modes: `--selftest` (text rules, phrase recognition, Desktop log parsing), `--wav
+  file.wav`, `--levels` (mic level), `--say "text"`.
 
-### Какая сессия на экране (`follow_desktop`)
-API модов этого не даёт, поэтому поток слушателя раз в 0,5 с дочитывает
-`%LOCALAPPDATA%\Claude\Logs\main.log` (при старте ещё `main1.log`; при ротации на
-10 МБ дочитывает хвост старого файла). Строки:
-- `Mapping internal session local_<X> to CLI session <uuid>` — соответствие id
-  Desktop ↔ id сессии CLI (его знает мод через `$.session.id()`);
-- `LocalSessions.setFocusedSession: sessionId=local_<X>` (`=null` игнорируется).
+### Which session is on screen (`follow_desktop`)
+The mod API doesn't tell, so a listener thread reads
+`%LOCALAPPDATA%\Claude\Logs\main.log` every 0.5 s (`main1.log` too at start; on the
+10 MB rotation it reads the old file's tail). Lines:
+- `Mapping internal session local_<X> to CLI session <uuid>`: Desktop id ↔ CLI
+  session id (the mod knows the latter from `$.session.id()`);
+- `LocalSessions.setFocusedSession: sessionId=local_<X>` (`=null` is ignored).
 
-Пишет `sessions/focused` (uuid или `''`, если соответствие неизвестно) и
-`sessions/desktop-ids.json` (`{uuid: "local_X"}`). Когда на экран выводят другую
-сессию, очищает `sessions/target` — голос снова идёт за экраном. Формат лога
-внутренний: если он сменится, голос вернётся к сессии с микрофоном.
+It writes `sessions/focused` (the uuid, or `''` if the mapping is unknown) and
+`sessions/desktop-ids.json` (`{uuid: "local_X"}`). When another session is brought on
+screen, it clears `sessions/target`, so voice follows the screen again. The log format
+is internal: if it changes, voice falls back to the mic's session.
 
 ---
 
-## 4. Мод (`mod/hooks/register.tsx`)
+## 4. The mod (`mod/hooks/register.tsx`)
 
-Мод Claude Code (API `claude-code`, хуки `on(event, handler)`), подключается через
-`CLAUDE_CODE_PLUGIN_DIRS`. Ключевое:
+A Claude Code mod (the `claude-code` API, `on(event, handler)` hooks), installed with
+`/plugin install voice-wake --marketplace aitkazeen/claude-voice` or loaded from a clone
+through `CLAUDE_CODE_PLUGIN_DIRS`. Key points:
 
-- **session.start**: регистрирует команды `/claude-voice`, `/claude-voice-on`,
-  `/claude-voice-off`, `/claude-voice-to [n]`; находит `listener/` (рядом с модом или
-  `$VOICE_WAKE_LISTENER_DIR`); запускает слушатель; раз в 5 с пишет heartbeat, раз
-  в 1 с проверяет свой inbox.
-- **Доставка в эту сессию**: `submit` → `$.prompt.submit({ text: "🎙 " + text, asUser: true })`
-  (не ждёт: промпт во время хода Claude встаёт в очередь, а «Клод, стоп» не должен
-  ждать вместе с ним). Если движок промпт отбросил (`r.drop`, например нажали Stop),
-  текст возвращается в поле ввода с toast. Без `submit` → `$.prompt.fill(mode: insert)`.
-- **Стоп**: `$.turn.abort({ turnId })` текущего хода.
-- **Озвучка**: хук `prompt.compose` добавляет в системный промпт правило
-  `SPEECH_RULE` (всегда, чтобы кэш промпта не ломался); `turn.complete` берёт
-  последнюю строку `🔊 …` ответа, чистит markdown и пишет в `listener/say`.
-- **UI**: полоса над полем ввода (`AbovePrompt`): фаза, таймер записи, куда идёт
-  голос, кнопки (Диктовать / Готово / Замолчать / Включить / Выключить / Голос сюда);
-  панель «Сессии» (`Pane`) со списком и горячими клавишами 1–9; строка статуса.
-- Включено/выключено — `$.store` (общее для всех сессий).
+- **session.start**: registers `/claude-voice`, `/claude-voice-on`, `/claude-voice-off`,
+  `/claude-voice-to [n]`; finds `listener/` (next to the mod, `$VOICE_WAKE_LISTENER_DIR`,
+  or the marketplace clone `%USERPROFILE%\.claude\plugins\marketplaces\claude-voice`);
+  starts the listener; writes a heartbeat every 5 s and checks its inbox every 1 s.
+- **Delivery to this session**: `submit` → `$.prompt.submit({ text: "🎙 " + text,
+  asUser: true })` (not awaited: a prompt sent during Claude's turn is queued, and
+  "Claude, stop" must not wait with it). If the engine drops the prompt (`r.drop`, e.g.
+  Stop was pressed), the text goes back into the box with a toast. Without `submit` →
+  `$.prompt.fill(mode: insert)`.
+- **Stop**: `$.turn.abort({ turnId })` of the current turn.
+- **Speech**: a `prompt.compose` hook adds the `SPEECH_RULE` to the system prompt
+  (always, so the prompt cache holds); `turn.complete` takes the reply's last `🔊 …`
+  line, strips markdown and writes it to `listener/say`.
+- **UI**: a band above the prompt (`AbovePrompt`): phase, recording timer, where voice
+  goes, buttons (Dictate / Done / Hush / Turn on / Turn off / Voice here); a Sessions
+  pane (`Pane`) with the list and hotkeys 1–9; the status line. All text comes from the
+  `UI` table, `ru` or `en` by the listener config's `"lang"` (English until a listener
+  is found).
+- On/off lives in `$.store` (shared by every session).
 
-### Маршрутизация между сессиями
-Реестр — файлы в `listener/sessions/` (у модов нет API для списка сессий, а
-`session.send` пришёл бы как сообщение пира, не как промпт пользователя):
+### Routing between sessions
+The registry is files in `listener/sessions/` (mods have no API to list sessions, and
+`session.send` would arrive as a peer's message, not as the user's prompt):
 
-| Файл | Кто пишет | Содержимое |
+| File | Written by | Contents |
 | --- | --- | --- |
-| `<id>.json` | каждая сессия раз в 5 с | `{id, folder, project, branch, label, seen, since, closed?}` |
-| `owner` | сессия, чей слушатель держит микрофон | её id |
-| `target` | выбор в панели / «Клод, сессия n» / `/claude-voice-to n` | id или пусто |
-| `focused`, `desktop-ids.json` | слушатель (см. выше) | сессия на экране; id Desktop |
-| `<id>.inbox` | сессия с микрофоном | `{seq, text, submit, …}` — последнее сообщение |
-| `<id>.ack` | получатель | `seq`, который он принял |
+| `<id>.json` | every session, every 5 s | `{id, folder, project, branch, label, seen, since, closed?}` |
+| `owner` | the session whose listener holds the mic | its id |
+| `target` | the pane / "Claude, session n" / `/claude-voice-to n` | an id, or empty |
+| `focused`, `desktop-ids.json` | the listener (see above) | the session on screen; Desktop ids |
+| `<id>.inbox` | the mic's session | `{seq, text, submit, …}`: the last message |
+| `<id>.ack` | the receiver | the `seq` it took |
 
-- Живая сессия — heartbeat моложе 20 с и не `closed`.
-- **Цель голоса** = `target` (если живая) → иначе `focused` (если живая) → иначе `owner`.
-- **Inbox/ack**: отправитель пишет inbox (`seq` = время) и через 4 с проверяет ack;
-  нет ack — доставляет у себя с предупреждением (голос не теряется). Получатель
-  берёт сообщение, только если оно моложе 4 с (иначе его уже доставил отправитель),
-  и не берёт то, что лежало до его старта. Номер последнего принятого `seq` хранится
-  в памяти мода (`$.state` для этого ненадёжен).
-- **Список сессий**: имя `проект · ветка` (проект — корень репозитория, у worktree —
-  основного; ветка — из `.git/HEAD`, у worktree через файл `.git` → `gitdir:`),
-  без префикса `claude/`; совпадающие имена различаются началом id. Порядок: эта
-  сессия № 1, остальные по времени появления (новые — в конец, номера не прыгают).
-- **Выбор сессии** пишет `target` (пусто, если выбрана сессия по умолчанию) и
-  открывает её в Desktop: `cmd /c start "" claude://claude.ai/epitaxy/local_<X>`.
+- A live session: heartbeat younger than 20 s, not `closed`.
+- **Voice target** = `target` (if live) → else `focused` (if live) → else `owner`.
+- **Inbox/ack**: the sender writes the inbox (`seq` = time) and checks the ack after
+  4 s; no ack → it delivers locally with a warning (voice is never lost). The receiver
+  takes a message only if it is younger than 4 s (else the sender has delivered it) and
+  never what was waiting before it started. The last taken `seq` is kept in the mod's
+  memory (`$.state` is unreliable for this).
+- **Session list**: named `project · branch` (project: the repository root, for a
+  worktree the main checkout's; branch: from `.git/HEAD`, for a worktree through the
+  `.git` file → `gitdir:`), without a `claude/` prefix; equal names get the start of
+  the id. Order: this session is #1, the others by when they appeared (new ones go
+  last, numbers don't jump).
+- **Choosing a session** writes `target` (empty if the default session is chosen) and
+  opens it in Desktop: `cmd /c start "" claude://claude.ai/epitaxy/local_<X>`.
 
 ---
 
-## 5. Как подключить в другом проекте (вариант А)
+## 5. Using it in another project (option A)
 
-Мод глобальный, не привязан к проекту: подключённый один раз, он работает во всех
-сессиях Claude Desktop, в любой папке.
+The mod is global, not tied to a project: installed once, it works in every Claude
+Desktop session, in any folder.
 
-1. `git clone https://github.com/aitkazeen/claude-voice` и `python listener/install.py`
-   (venv, модели ~1,2 ГБ; с NVIDIA ещё CUDA ~2 ГБ). Требуется Windows, Python 3.11+.
-2. В `~/.claude/settings.json`:
-   `{"env": {"CLAUDE_CODE_PLUGIN_DIRS": "C:\\path\\to\\claude-voice\\mod"}}`
-   (если переменная уже есть — дописать через `;`). Перезапустить Desktop.
-3. Открыть сессию в папке своего проекта — над полем ввода появится полоса 🎙.
-4. Для своего словаря — `listener/config.json`, например:
+1. In Claude Code: `/plugin install voice-wake --marketplace aitkazeen/claude-voice`.
+2. In a terminal:
+   `python %USERPROFILE%\.claude\plugins\marketplaces\claude-voice\listener\install.py --lang en`
+   (venv, models ~1.2 GB; with NVIDIA also CUDA ~2 GB). Needs Windows, Python 3.10+.
+   Restart Desktop.
+3. Open a session in your project's folder: the 🎙 band appears above the prompt.
+4. For your own vocabulary, `listener/config.json` in the marketplace clone, e.g.:
    ```json
-   { "whisper_prompt": "Claude. Резюме, вакансия, сопроводительное письмо, собеседование, HeadHunter, LinkedIn." }
+   { "lang": "en", "whisper_prompt": "Claude. Resume, vacancy, cover letter, interview, LinkedIn." }
    ```
 
-Что знать Claude в этом проекте: сообщения с префиксом `🎙` надиктованы голосом —
-в них возможны ошибки распознавания (похожие по звучанию слова, нет пунктуации);
-такое сообщение надо понимать по смыслу. Строку `🔊` в начале ответа на них
-запрашивает сам мод через системный промпт — делать ничего не нужно.
+What Claude should know in that project: messages prefixed with `🎙` were dictated by
+voice and may contain recognition errors (similar-sounding words, no punctuation); read
+them by meaning. The mod itself asks for the `🔊` line through the system prompt;
+nothing to do.
 
 ---
 
-## 6. Переиспользовать слушатель в своём приложении (вариант Б)
+## 6. Reusing the listener in your own app (option B)
 
-Слушатель не зависит от Claude: это процесс, который пишет JSON-строки в stdout.
-Минимальная интеграция:
+The listener doesn't depend on Claude: it is a process that writes JSON lines to stdout.
+A minimal integration:
 
 ```python
 import json, os, subprocess
@@ -209,47 +218,48 @@ p = subprocess.Popen([r"listener\.venv\Scripts\python.exe", "-u", r"listener\lis
 for line in p.stdout:
     ev = json.loads(line)
     if "text" in ev:
-        handle_dictation(ev["text"], send=ev["submit"])   # ваше действие
+        handle_dictation(ev["text"], send=ev["submit"])   # your action
     elif ev.get("stop"):
         cancel_current_action()
 ```
 
-- Озвучить ответ: записать текст в `listener/say`.
-- Начать запись кнопкой: записать `dictate` в `listener/cmd`; закончить — `stop`.
-- Свои команды — в `command_phrases()` (каждое слово должно быть в словаре Vosk;
-  Vosk пишет «ё»).
-- Фразы активации, конечное слово, язык (`ru`/`en`/`auto`) — в `config.json`
-  (таблица ключей — в README).
-- Только один процесс на машину (порт-замок); второй получит `busy` и выйдет.
+- Speak a reply: write the text to `listener/say`.
+- Start recording with a button: write `dictate` to `listener/cmd`; end it with `stop`.
+- Phrases (wake, end word, commands), the language (`"lang"`: `en` / `ru`; whisper's
+  `"language"`: `ru` / `en` / `auto`) are all in `config.json` (the key table is in the
+  README). Every phrase word must be in the Vosk vocabulary.
+- One process per machine (the port lock); a second one gets `busy` and exits.
 
-Полезные приёмы для своего кода, даже без слушателя:
-- конец фразы — по слову-маркеру на паузе, проверенному большой моделью, а не по
-  тишине: можно думать вслух с паузами;
-- малая модель с узкой грамматикой — для фразы активации, большая — для текста;
-- в подсказку whisper не класть управляющие слова (эхо на тишине);
-- допускать варианты написания (`ё/е`, `и/е`) при сравнении слов;
-- при доставке между процессами — подтверждение и резервный путь, иначе сообщения
-  теряются молча.
+Techniques worth reusing even without the listener:
+- end a phrase on a marker word at a pause, checked by the big model, not on silence:
+  you can think aloud with pauses;
+- a small model with a narrow grammar for the wake phrase, a big one for the text;
+- keep control words out of whisper's prompt (echo on silence);
+- accept spelling variants (`ё/е`, `и/е`) when comparing words;
+- for delivery between processes, an acknowledgement and a fallback path, or messages
+  get lost silently.
 
 ---
 
-## 7. Ограничения
+## 7. Limitations
 
-- Только Windows (`winsound`, toast-уведомления, `kernel32`, пути `%LOCALAPPDATA%`).
-- Слушатель живёт, пока открыт Claude Desktop с хотя бы одной сессией с модом.
-- Задержка: ~0,5 с паузы после «приём» + распознавание (на GPU ~0,4 с на 8 с речи,
-  на CPU ~1,7 с; первая загрузка моделей на GPU — до 40 с, потом ~8 с).
-- «приём» с паузой посреди сообщения завершит его; сообщение, начинающееся со слова
-  «приём», потеряет это слово.
-- Чтение лога Desktop — недокументированный формат; при его смене выбор «сессии на
-  экране» отключается сам (остаётся сессия с микрофоном).
-- Около 1 ГБ ОЗУ (и ~1 ГБ видеопамяти на GPU), пока слушатель работает.
-- Приватность: всё офлайн; распознанный текст пишется в `listener/listen.log`,
-  первые 60 символов последнего промпта сессии — в `listener/sessions/*.json`.
-  Файлы-каналы (`*.inbox`, `cmd`, `say`) доступны любой программе пользователя.
+- Windows only (`winsound`, toast notifications, `kernel32`, `%LOCALAPPDATA%` paths).
+- The listener lives while Claude Desktop is open with at least one session with the mod.
+- Latency: ~0.5 s of pause after "over" + transcription (on a GPU ~0.4 s for 8 s of
+  speech, on a CPU ~1.7 s; the first model load on a GPU takes up to 40 s, later ~8 s).
+- "Over" with a pause mid-message ends it; a message that starts with "over" loses that
+  word.
+- Reading Desktop's log relies on an undocumented format; if it changes, "the session on
+  screen" turns itself off (the mic's session remains).
+- About 1 GB of RAM (and ~1 GB of VRAM on a GPU) while the listener runs.
+- Privacy: everything is offline; the transcribed text goes into `listener/listen.log`,
+  the first 60 characters of a session's last prompt into `listener/sessions/*.json`.
+  The channel files (`*.inbox`, `cmd`, `say`) are open to any program of the user.
 
-## 8. Проверка
+## 8. Checks
 
-- `claude plugin test mod` — тесты мода (маршрутизация, inbox/ack, UI, команды).
-- `listener\.venv\Scripts\python listener\listen.py --selftest` — правила текста,
-  распознавание фраз, разбор лога Desktop, ротация.
+- `claude plugin test mod`: the mod's tests (routing, inbox/ack, UI, commands).
+- `listener\.venv\Scripts\python listener\listen.py --selftest`: text rules, phrase
+  recognition (both languages), Desktop log parsing, rotation.
+- `listener\.venv\Scripts\python listener\listen.py --wav file.wav`: the whole pipeline
+  on a recording; it prints the same lines as the mic run, commands included.

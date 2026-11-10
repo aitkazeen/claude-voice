@@ -1,10 +1,13 @@
-"""One-time setup: venv, deps, models. Run: python listener/install.py [--gpu | --cpu]
+"""One-time setup: venv, deps, models. Run: python listener/install.py [--lang en|ru] [--gpu | --cpu]
 
 The CUDA libraries (~2 GB) are installed only with an NVIDIA card (found by
 `nvidia-smi -L`) or --gpu; --cpu skips them. Whisper runs on the CPU without them.
+--lang picks the voice phrases' language (saved as "lang" in config.json, default ru)
+and the Vosk model for it.
 """
 import hashlib
 import io
+import json
 import shutil
 import subprocess
 import sys
@@ -17,10 +20,20 @@ HERE = Path(__file__).resolve().parent
 VENV = HERE / ".venv"
 PY = VENV / "Scripts" / "python.exe"
 MODELS = HERE / "models"
-VOSK = "vosk-model-small-ru-0.22"
+VOSK_MODELS = {"ru": "vosk-model-small-ru-0.22", "en": "vosk-model-small-en-us-0.15"}
+CONFIG = HERE / "config.json"
+cfg = json.loads(CONFIG.read_text(encoding="utf-8")) if CONFIG.exists() else {}
+if "--lang" in sys.argv:
+    cfg["lang"] = sys.argv[sys.argv.index("--lang") + 1]
+    if cfg["lang"] not in VOSK_MODELS:
+        sys.exit(f"--lang: use one of {', '.join(VOSK_MODELS)}")
+    CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+VOSK = VOSK_MODELS[cfg.get("lang", "ru")]
+print(f"language: {cfg.get('lang', 'ru')}")
 # Downloads are checked against these before use: a swapped file is refused, not loaded.
 SHA256 = {
-    f"{VOSK}.zip": "961d5ff98a17f4aa6de69864d0aa71fa5bac682301d2b5d17a3f24c5c99a46d4",
+    "vosk-model-small-ru-0.22.zip": "961d5ff98a17f4aa6de69864d0aa71fa5bac682301d2b5d17a3f24c5c99a46d4",
+    "vosk-model-small-en-us-0.15.zip": "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498",
     "kokoro-v1.0.onnx": "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5",
     "voices-v1.0.bin": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
 }
@@ -49,7 +62,7 @@ if gpu:
 
 MODELS.mkdir(exist_ok=True)
 if not (MODELS / VOSK).exists():
-    print(f"downloading {VOSK} (~45 MB)...")
+    print(f"downloading {VOSK} (~40 MB)...")
     data = urllib.request.urlopen(f"https://alphacephei.com/vosk/models/{VOSK}.zip").read()
     check(f"{VOSK}.zip", data)
     zipfile.ZipFile(io.BytesIO(data)).extractall(MODELS)
