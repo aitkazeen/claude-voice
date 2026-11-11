@@ -1,0 +1,19 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  selftest:
+    # The listener is Windows-only (winsound, ctypes process calls).
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # The selftest needs numpy only; models and audio libraries are not installed.
+      - run: pip install "numpy<2.3"
+      - run: python listener/listen.py --selftest
+      - run: python -m py_compile listener/listen.py listener/install.py
