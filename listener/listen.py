@@ -37,13 +37,15 @@ DEFAULTS = {
     "submit_on_end": True,  # the end word also sends; False: insert only, send with submit_word
     "submit_word": "отправь",  # with submit_on_end false: "…, отправь, приём" sends
     "vosk_model": "models/vosk-model-small-ru-0.22",
-    "whisper_model": "models/faster-whisper-small",
+    "whisper_model": "models/faster-whisper-large-v3-turbo",
     "language": "ru",  # "ru", "en" or "auto"
     "whisper_device": "auto",  # "auto" (GPU if it works, else CPU), "cuda" or "cpu"
     "beam_size": 5,  # 1 is faster, 5 makes fewer gross mistakes
     # Words you say often: whisper leans toward them. Not the end word: on near
     # silence whisper may echo the prompt, and an echoed "приём" would send.
-    "whisper_prompt": "Claude. Сессия, мод, коммит, ветка, тест, воспроизведение, распознавание.",
+    # English words in Russian speech: written in Latin here, whisper keeps them Latin
+    # (without them "pytest" comes out «пайтест»). Add your own.
+    "whisper_prompt": "Claude, commit, branch, pull request, Slack, npm install, pytest, whisper, refactoring, feature. Сессия, мод, коммит, ветка, тест.",
     "energy_threshold": 500,  # only for --levels
     "end_guard_sec": 0.8,  # ignore the end word this long after the trigger (tail of the wake phrase)
     "start_timeout_sec": 8,  # no speech at all this long after the wake phrase: cancel

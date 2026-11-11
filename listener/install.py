@@ -54,12 +54,12 @@ if not (MODELS / VOSK).exists():
     check(f"{VOSK}.zip", data)
     zipfile.ZipFile(io.BytesIO(data)).extractall(MODELS)
 
-if not (MODELS / "faster-whisper-small" / "model.bin").exists():
-    print("downloading faster-whisper small (~480 MB)...")
+if not (MODELS / "faster-whisper-large-v3-turbo" / "model.bin").exists():
+    print("downloading faster-whisper large-v3-turbo (~1.6 GB)...")
     subprocess.check_call([
         str(PY), "-c",
-        "import sys; from faster_whisper import download_model; download_model('small', output_dir=sys.argv[1])",
-        str(MODELS / "faster-whisper-small"),
+        "import sys; from faster_whisper import download_model; download_model('large-v3-turbo', output_dir=sys.argv[1])",
+        str(MODELS / "faster-whisper-large-v3-turbo"),
     ])
 
 KOKORO = MODELS / "kokoro"

@@ -70,7 +70,7 @@
    распознаёт речь с прошлой паузы (+0,3 с перекрытия) и проверяет, кончается ли она
    на `end_word` или `cancel_word`. Догадке Vosk про «приём» не верим: с одной
    фразой в грамматике он слышит её где попало.
-3. **Распознавание.** faster-whisper `small`: `beam_size=5`, `vad_filter=True`,
+3. **Распознавание.** faster-whisper `large-v3-turbo`: `beam_size=5`, `vad_filter=True`,
    `condition_on_previous_text=False`, `initial_prompt` — словарь частых терминов
    (в нём **нет** слова «приём»: на тишине whisper иногда повторяет подсказку, и
    «приём» отправил бы сообщение). На NVIDIA — `cuda/float16` (DLL из pip-пакетов
