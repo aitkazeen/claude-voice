@@ -56,6 +56,10 @@ let label = ''
 let since = 0
 let recTimer: { cancel: () => void } | undefined // ticks the recording's time on the band
 let inboxSeen: number | undefined // seq of the last inbox message taken here
+let ownsMic = false // this session's listener holds the mic: it writes `phase` for the others
+let mirroring = false // another session's listener holds the mic: show its phase here
+// What a session without the mic shows of the mic's: you switch sessions, the band follows.
+const LIVE: Phase[] = ['listening', 'recording', 'transcribing', 'speaking']
 
 // Sessions find each other through files in listener/sessions/ (the mod API
 // has no way to list sessions, and session.send would reach the other session
@@ -65,6 +69,7 @@ let inboxSeen: number | undefined // seq of the last inbox message taken here
 //   <id>.ack    the seq it took; none within ACK_MS and the sender delivers it itself
 //   target      the id chosen in the pane; empty or stale = the shown session (below)
 //   owner       the session whose listener holds the mic
+//   phase       its listener's phase, shown by every other session's band
 //   focused     the session Claude Desktop shows; the listener writes it (and
 //               drops `target` when another session is put on screen)
 //   desktop-ids.json  { session id: Desktop's local_ id }, to open one in Desktop
@@ -216,6 +221,15 @@ async function setPhase($: EngineInterface, p: Phase) {
     await update($, view, v => ({ ...v, said }))
   }
   await update($, phase, () => p)
+  if (ownsMic && dir) await $.fs.write(`${reg()}/phase`, p)
+}
+
+/** Without the mic: show what the mic's listener does (recording, speaking…), else "busy". */
+async function mirror($: EngineInterface) {
+  if (!mirroring || !dir) return
+  const p = (await $.fs.read(`${reg()}/phase`).catch(() => '')).trim() as Phase
+  const show = LIVE.includes(p) ? p : 'busy'
+  if (show !== (await read($, phase))) await setPhase($, show)
 }
 
 async function listenerDir($: EngineInterface): Promise<string | undefined> {
@@ -332,7 +346,7 @@ async function run($: EngineInterface) {
     $.ui.log(`voice-wake: no listener venv found; run python listener/install.py`)
     return
   }
-  await setPhase($, 'loading')
+  if (!mirroring) await setPhase($, 'loading') // a retry while busy keeps showing the mic's phase
   const proc = $.process.spawn({
     argv: [`${dir}/.venv/Scripts/python.exe`, '-u', `${dir}/listen.py`],
     cwd: dir,
@@ -361,6 +375,8 @@ async function run($: EngineInterface) {
         }
         if (line.status === 'ready') {
           if (dir) await $.fs.write(`${reg()}/owner`, selfId)
+          mirroring = false
+          ownsMic = true
           await setPhase($, 'listening')
         }
         if (line.status === 'recording') await setPhase($, 'recording')
@@ -374,12 +390,16 @@ async function run($: EngineInterface) {
   } catch (err) {
     $.ui.log(`voice-wake: listener failed: ${String(err)}`)
   }
+  if (ownsMic && dir) await $.fs.write(`${reg()}/phase`, '').catch(() => undefined)
+  ownsMic = false
   const stoppedByUs = child !== proc
   if (child === proc) child = undefined
   if (stoppedByUs || !(await isEnabled($))) return
   if (busy) {
     // Another session owns the mic; take over once it lets go.
+    mirroring = true
     await setPhase($, 'busy')
+    await mirror($)
     $.clock.after(BUSY_RETRY_MS, () => void run($))
   } else if ((await $.clock.now()) - startedAt > 60_000) {
     // It ran a while, then died (killed, a crash mid-session): start it again.
@@ -398,6 +418,7 @@ async function run($: EngineInterface) {
 async function setEnabled($: EngineInterface, enable: boolean) {
   await $.store.set('enabled', enable)
   if (enable) return run($)
+  mirroring = false
   const proc = child
   child = undefined
   void proc?.return(undefined)
@@ -438,7 +459,7 @@ export const register: Register = on => {
       await heartbeat($)
       await checkInbox($) // marks what waits there as seen
       $.clock.every(HEARTBEAT_MS, () => void heartbeat($))
-      $.clock.every(1_000, () => void checkInbox($))
+      $.clock.every(1_000, () => void checkInbox($).then(() => mirror($)))
     }
     if (await isEnabled($)) void run($)
     else await setPhase($, 'off')
