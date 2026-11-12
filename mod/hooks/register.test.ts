@@ -212,6 +212,33 @@ test('a session submits what lands in its inbox, not what waited there before it
   for (let i = 0; i < 20; i++) await (await $.ui.mount(BAND)).unmount()
 })
 
+test('a session without the mic shows what the mic does: you switch to it, the recording shows there', async ($, on) => {
+  const { files, clock } = engine(on, 'bbb')
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"status": "busy"}\n' }
+    return { value: { code: 3, signal: null } } // exits, as the listener does when the mic is taken
+  })
+  files.set(`${sessionsDir()}/phase`, 'listening')
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount(BAND)
+  await until(async () => (await ui.find({ key: 'Диктовать' })) !== undefined)
+  expect(await ui.find({ key: 'Диктовать' })).toBeDefined()
+
+  files.set(`${sessionsDir()}/phase`, 'recording') // the mic's session started recording
+  clock.tick()
+  await until(async () => (await ui.find({ key: 'Готово' })) !== undefined)
+  expect(await ui.find({ key: 'Готово' })).toBeDefined()
+
+  files.set(`${sessionsDir()}/phase`, '') // its listener stopped: "busy" again
+  clock.tick()
+  await until(async () => (await ui.find({ key: 'Выключить везде' })) !== undefined)
+  expect(await ui.find({ key: 'Выключить везде' })).toBeDefined()
+  // A session without the mic never writes the mic's phase.
+  expect(files.get(`${sessionsDir()}/phase`)).toBe('')
+  await ui.unmount()
+  for (let i = 0; i < 20; i++) await (await $.ui.mount(BAND)).unmount()
+})
+
 test("a reply's 🔊 line goes to the listener to speak; a reply without one, a subagent's or an aborted one does not", async ($, on) => {
   const { file, files } = engine(on)
   on('process.spawn', async function* () {
