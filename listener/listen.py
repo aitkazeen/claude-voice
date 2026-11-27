@@ -51,6 +51,9 @@ DEFAULTS = {
     "start_timeout_sec": 8,  # no speech at all this long after the wake phrase: cancel
     "max_sec": 300,  # hard cap without the end word: the text is inserted, not sent
     "preroll_sec": 1.0,  # audio before the trigger kept (the phrase often starts with the wake word)
+    # Vosk under a tiny grammar maps any speech (TV, a call) to its nearest phrase;
+    # whisper then re-reads the last seconds and the phrase counts only if it holds "Клод".
+    "confirm_wake": True,
     "beep": True,
     "toast": True,
     "device": None,  # mic index or name; None = default
@@ -101,6 +104,9 @@ def speech_pieces(text, min_len=25):
 # rest of the wake phrase ("приём") is stripped by clean().
 WAKE_PREFIX = re.compile(r"^\s*(клод|клот|клоуд|клауд|клод[ауе]|claude|clod|claud)\b" + PUNCT, re.I)
 # What may follow "Клод" in the preroll of «Клод, текст»: stripped like "приём".
+# "Клод" anywhere in whisper's reading of a phrase Vosk heard: the check against false triggers.
+WAKE_WORD = re.compile(r"\b(кло[дтуо]|клау?д|claude?|clod)", re.I)
+CONFIRM_SEC = 3.0  # audio re-read by whisper to confirm a phrase
 TEXT_PREFIX = re.compile(r"^\s*(текст|text)\b" + PUNCT, re.I)
 
 
@@ -341,16 +347,15 @@ def selftest():
         def Reset(self):
             pass
 
-    class Block:
-        def tobytes(self):
-            return b""
+    import numpy as np
 
-    def heard(script):
+    def heard(script, whisper="Клод"):
         lst = Listener.__new__(Listener)
         lst.wake, lst.stop, lst.commands, lst.stop_seen = "клод приём", "клод стоп", command_phrases(), 0
         lst.text_only = "клод текст"
-        lst.rec = Rec(script)
-        return [lst.heard_phrase(Block()) for _ in script]
+        lst.rec, lst.recent, lst.cfg = Rec(script), [], {"confirm_wake": True}
+        lst.transcribe = lambda audio, prompt=True: whisper
+        return [lst.heard_phrase(np.zeros(BLOCK, dtype=np.int16)) for _ in script]
 
     p = (False, "клод стоп")
     assert heard([p, p, p]) == [None, None, "клод стоп"]  # stop from a steady partial, before the pause
@@ -358,6 +363,8 @@ def selftest():
     assert heard([(False, "клод сессия"), (True, "клод сессия три")]) == [None, "клод сессия три"]
     assert heard([(True, "клод текст")]) == ["клод текст"]
     assert heard([(False, "клод приём"), (False, "клод приём"), (False, "клод приём")]) == [None] * 3  # only stop is early
+    assert heard([(True, "клод приём")], whisper="Можете надеяться.") == [None]  # background speech: not the wake phrase
+    assert heard([(True, "клод приём")], whisper="Клот, приём.") == ["клод приём"]
     print("selftest ok")
 
 
@@ -475,6 +482,7 @@ class Listener:
         log("loading whisper...")
         self.whisper = load_whisper(str(HERE / cfg["whisper_model"]), cfg["whisper_device"])
         self.history = []  # recent blocks for preroll
+        self.recent = []  # the last CONFIRM_SEC of blocks, for the wake check
         self.start_tts()
 
     def start_tts(self):
@@ -510,6 +518,8 @@ class Listener:
         partials under a small grammar fire on almost anything. The stop phrase
         alone is taken from a partial too, once it has held for STOP_BLOCKS
         blocks, so «Клод, стоп» does not wait for the pause."""
+        self.recent.append(block)
+        del self.recent[: -int(CONFIRM_SEC * RATE / BLOCK)]
         if not self.rec.AcceptWaveform(block.tobytes()):
             # ponytail: 0.3 s of a steady partial; raise STOP_BLOCKS if noise ever stops Claude.
             partial = f" {json.loads(self.rec.PartialResult()).get('partial', '')} "
@@ -523,8 +533,22 @@ class Listener:
         for phrase in (self.wake, self.text_only, self.stop, *self.commands):
             if f" {phrase} " in heard:
                 self.rec.Reset()
-                return phrase
+                return phrase if self.confirmed(phrase) else None
         return None
+
+    def confirmed(self, phrase):
+        """Whisper re-reads the last CONFIRM_SEC: the phrase counts only if "Клод" is in it."""
+        import numpy as np
+
+        if not self.cfg["confirm_wake"]:
+            return True
+        audio = np.concatenate(self.recent)
+        self.recent.clear()  # the next phrase is checked on its own audio
+        text = self.transcribe(audio, prompt=False)
+        ok = bool(WAKE_WORD.search(text))
+        if not ok:
+            log(f"ignored {phrase!r}: whisper heard {text!r}")
+        return ok
 
     def pause_word(self, audio):
         """What the speech since the last pause ends with: "end", "cancel" or None."""
@@ -581,13 +605,14 @@ class Listener:
                 break
         return np.concatenate(out), False
 
-    def transcribe(self, audio):
+    def transcribe(self, audio, prompt=True):
+        """`prompt`=False for the wake check: the prompt names Claude, and on noise whisper echoes it."""
         lang = None if self.cfg["language"] == "auto" else self.cfg["language"]
         segs, _ = self.whisper.transcribe(
             audio.astype("float32") / 32768.0,
             language=lang,
             beam_size=self.cfg["beam_size"],
-            initial_prompt=self.cfg["whisper_prompt"] or None,
+            initial_prompt=(self.cfg["whisper_prompt"] or None) if prompt else None,
             condition_on_previous_text=False,  # one misheard piece must not steer the next
             vad_filter=True,
         )
