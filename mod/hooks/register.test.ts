@@ -230,7 +230,7 @@ test("a reply's 🔊 line goes to the listener to speak; a reply without one, a 
   await end('Просто ответ без строки.')
   await end('🔊 From a subagent.', { agentId: 'a1' })
   await end('🔊 Cut off.', { reason: 'aborted', isAborted: true })
-  await end('🔊 Готово, тесты проходят.\n\nСделал.')
+  await end('🔊 По стеку подходит, но я бы пропустил.') // the English voice cannot read it
   expect(file('/listener/say')).toBe(undefined)
 })
 

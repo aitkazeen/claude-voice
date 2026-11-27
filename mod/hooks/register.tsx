@@ -14,7 +14,7 @@ const PANE = 'voice-sessions'
 // the reply to such a prompt with a SPEAK line, which the listener reads aloud.
 const VOICE_MARK = '🎙'
 const SPEAK = '🔊'
-const SPEECH_RULE = `Voice replies: a user message that starts with ${VOICE_MARK} was dictated by voice, and one line of your reply to it is read aloud by an English text-to-speech voice when the reply is done. For such messages only, begin your final reply (the text after your last tool call) with one line: "${SPEAK} " followed by one short plain-English sentence (at most 50 words) giving the outcome or the answer. That line is always written in English, never in Russian or any other language, even when the user writes in Russian and the rest of the reply is in Russian: translate it. The voice cannot read Cyrillic. No markdown, code, file paths or URLs in that line. Never add it to messages without ${VOICE_MARK}.`
+const SPEECH_RULE = `Voice replies: a user message that starts with ${VOICE_MARK} was dictated by voice, and one line of your reply to it is read aloud by an English text-to-speech voice when the reply is done. For such messages only, begin your final reply (the text after your last tool call) with one line: "${SPEAK} " followed by one short plain-English sentence (at most 50 words) giving the outcome or the answer. Write that line in English only, never in Russian or any other language, even when the person and the rest of the reply use another language: the voice can only read English. No markdown, code, file paths or URLs in that line. Never add it to messages without ${VOICE_MARK}.`
 
 const phase = atom({ plugin: 'voice-wake', key: 'phase' } as const, 'off', { shape: 'phase-1' })
 const sessions = atom({ plugin: 'voice-wake', key: 'sessions' } as const, [], { shape: 'sessions-4' })
@@ -233,11 +233,11 @@ async function isEnabled($: EngineInterface) {
 }
 
 /** The reply's spoken line (the last SPEAK line, wherever it stands), as plain text, or undefined.
- *  A line with Cyrillic is skipped: the English voice turns it into gibberish. */
+ * A line in Cyrillic is not spoken: the English voice turns it into noise. */
 function spokenLine(answer: string): string | undefined {
-  const lines = answer.split('\n').filter(l => l.trim().startsWith(SPEAK) && !/\p{Script=Cyrillic}/u.test(l))
+  const lines = answer.split('\n').filter(l => l.trim().startsWith(SPEAK))
   const last = lines.at(-1)?.trim().slice(SPEAK.length).replace(/[*_`#>]/g, '').trim()
-  return last || undefined
+  return last && !/[Ѐ-ӿ]/.test(last) ? last : undefined
 }
 
 /** A voice prompt the engine did not take (a Stop pressed while it waited, a
